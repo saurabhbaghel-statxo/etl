@@ -78,7 +78,7 @@ class Transform(Protocol):
 
     async def atransform_data(self, *args, **kwargs): ...
 
-    def transform_data(self, *args, **kwargs): ...
+    def transform_data(self, *args, **kwargs) -> pl.DataFrame: ...
 
     @property
     def next_transform(self) -> Optional["Transform"]: ...
@@ -101,9 +101,23 @@ class TransformPipe:
 
     def __init__(
             self, 
+            df: pl.DataFrame | str,
             transforms: Optional[List[Transform]] = [],
-            init_transform: Optional[Transform] = None
+            init_transform: Optional[Transform] = None,
+            save_as: Literal["parquet_table"] = "parquet_table",
+            table_path: Optional[str] = None,
+            write_chunk_size: Optional[int] = None
         ):
+        if type(df) is str:
+            self._df = pl.read_parquet(df)
+        else:
+            self._df = df
+
+        if save_as == "parquet_table":
+            assert table_path, "When saving as a parquet table, provide table path"
+            self._write_chunk_size = write_chunk_size or 50_000
+            self._table_path = table_path
+        
         if transforms:
             self._all_transforms_: List[Transform] = transforms
             self._first_transform = self._all_transforms_[0]
@@ -113,7 +127,8 @@ class TransformPipe:
         elif init_transform:
             self._first_transform = init_transform
             # Makes a graph from the already connected transforms
-    
+
+        
     def _make_graph(self):
         """Makes graph of the given """
         pass
@@ -134,16 +149,30 @@ class TransformPipe:
             logger.info("%s: %s - %s", i+1, _transform.__class__.__name__, _transform.__class__.__doc__.strip("\n"))
             i += 1
         
-    def transform_data(self, df: pl.DataFrame) -> pl.DataFrame:
+    def transform_data(self) -> pl.DataFrame:
         # start with the first transform
         # _transform = self._all_transforms_[0]
         _transform = self._first_transform
         while _transform:
             logger.info("Transform=%s", _transform.__class__.__name__, exc_info=True)
-            df = _transform.transform_data(df)
+            self._df = _transform.transform_data(self._df)
             _transform = _transform.next_transform
         
-        return df
+        if self._table_path:
+            os.makedirs(self._table_path, exist_ok=True)
+            total_rows = self._df.height
+            logger.info("Saving transformed data in %s dir in chunks of %s rows", self._table_path, self._write_chunk_size)
+
+            _table_name = os.path.basename(self._table_path)
+
+            for start in range(0, total_rows, self._write_chunk_size):
+                end = min(start + self._write_chunk_size, total_rows)
+                chunk = self._df[start:end]
+                chunk_file = os.path.join(self._table_path, f"{_table_name}_chunk_{start}_{end}.parquet")
+                chunk.write_parquet(chunk_file)
+                logger.debug("Saved chunk: %s rows -> %s", end-start, chunk_file)
+
+        return self._df
 
 
 class Linkable:
@@ -921,18 +950,7 @@ class SelectColumns:
     
 
     def transform_data(self, df: pl.DataFrame) -> pl.DataFrame:
-        if self._return_dtype:
-            return df.with_columns(
-                pl.col(self._column)
-                .map_elements(self._func, return_dtype=self._return_dtype)
-                .alias(self._alias)
-            )
-        else: 
-            return df.with_columns(
-                pl.col(self._column)
-                .map_elements(self._func)
-                .alias(self._alias)
-            )
+        return df.select(self._columns)
 
     @property
     def next_transform(self) -> Optional[Transform]:
@@ -948,6 +966,113 @@ class SelectColumns:
 
     @prev_transform.setter
     def prev_transform(self, transform: Transform) -> None:
+        self._linkable.prev = transform
+
+
+class ConditionalColumnTransform:
+    """
+    Creates a new column based on multiple conditions using Polars when-then-otherwise logic.
+    
+    This transform allows you to create conditional columns similar to SQL CASE WHEN statements.
+    """
+    
+    def __init__(
+            self,
+            conditions: List[pl.Expr],
+            then_values: List[Any],
+            otherwise_value: Any = None,
+            alias: str = "conditional_column"
+    ):
+        """
+        Initialize the conditional column transform.
+        
+        Parameters
+        ----------
+        conditions : List[pl.Expr]
+            List of Polars expressions representing conditions to evaluate
+        then_values : List[Any]
+            List of values/expressions to return when each condition is True
+        otherwise_value : Any, optional
+            Value to return when no conditions match, by default None
+        alias : str, optional
+            Name for the new column, by default "conditional_column"
+            
+        Examples
+        --------
+        ```
+        transform = ConditionalColumnTransform(
+            conditions=[pl.col("age") > 18],
+            then_values=["Adult"],
+            otherwise_value="Minor",
+            alias="age_group"
+        )
+        ```
+
+        
+
+        ```
+        transform = ConditionalColumnTransform(
+            conditions=[
+                pl.col("score") >= 90,
+                pl.col("score") >= 80,
+                pl.col("score") >= 70
+            ],
+            then_values=["A", "B", "C"],
+            otherwise_value="F",
+            alias="grade"
+        )
+        ```
+        """
+        if len(conditions) != len(then_values):
+            raise ValueError("conditions and then_values must have the same length")
+        
+        self._conditions = conditions
+        self._then_values = then_values
+        self._otherwise_value = otherwise_value
+        self._alias = alias
+        self._linkable = Linkable()
+    
+    def _build_conditional_expression(self) -> pl.Expr:
+        """Build the chained when-then-otherwise expression."""
+        if not self._conditions:
+            raise ValueError("At least one condition must be provided")
+        
+        # Start with the first condition
+        expr = pl.when(self._conditions[0]).then(self._then_values[0])
+        
+        # Chain additional when-then clauses
+        for condition, value in zip(self._conditions[1:], self._then_values[1:]):
+            expr = expr.when(condition).then(value)
+        
+        # Add otherwise clause
+        expr = expr.otherwise(self._otherwise_value)
+        
+        return expr.alias(self._alias)
+    
+    async def atransform_data(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Asynchronously transform the dataframe."""
+        expr = self._build_conditional_expression()
+        return df.with_columns(expr)
+    
+    def transform_data(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Transform the dataframe."""
+        expr = self._build_conditional_expression()
+        return df.with_columns(expr)
+    
+    @property
+    def next_transform(self) -> Optional["Transform"]:
+        return self._linkable.next
+    
+    @property
+    def prev_transform(self) -> Optional["Transform"]:
+        return self._linkable.prev
+    
+    @next_transform.setter
+    def next_transform(self, transform: "Transform") -> None:
+        self._linkable.next = transform
+    
+    @prev_transform.setter
+    def prev_transform(self, transform: "Transform") -> None:
         self._linkable.prev = transform
 
 

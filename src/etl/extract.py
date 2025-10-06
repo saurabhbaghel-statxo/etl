@@ -20,7 +20,6 @@ import asyncpg
 from . import common
 
 
-
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -248,7 +247,7 @@ class ExtractFromPostgres:
         # if cursor
 
 
-    async def get_data(self, table_name: str | None = None):
+    async def _get_data_one_table(self, table_name: str | None = None):
 
         if table_name and self._table_name:
             # use this table
@@ -262,29 +261,30 @@ class ExtractFromPostgres:
                 table_name = self._table_name
             else:
                 raise ValueError("Provide Table Name")
-        
-        print(common.Ui.heading_divider)
-        print("{:^10}".format("Extracting Data from Postgres"), end=" | ")
-        print("{:>10}".format(self.database), end=" | ")
-        print("{:^10}".format(table_name), end=" | ")
-        print(common.Ui.heading_divider)
 
         # establish connection
         await self.get_connection()
 
         await self._fetch_chunks_of_data_from_db(table_name)
 
-    async def get_all_tables(self):
+    async def get_data(self, table_names: List[str] | None = None):
         await self.get_connection()
 
+        print(common.Ui.heading_divider)
+        print("{:^10}".format("Extracting Data from Postgres"), end=" | ")
+        print("{:>10}".format(self.database), end=" | ")
+        print(common.Ui.heading_divider)
+        
+        # making a list of tables to be downloaded
+        # if table names is not given then
+        # get all the tables
+        _list_tables = table_names or self._get_all_table_names_in_database()
 
         # this should ideally have a separate thread for each table
-
-        async for table in self._get_all_table_names_in_database():
+        async for table in _list_tables:
             logger.debug("Fetching Table=%s", table)
-            await self._fetch_chunks_of_data_from_db(table)
-        
-
+            await self._get_data_one_table(table)
+    
         await self._conn.close()
         
 
