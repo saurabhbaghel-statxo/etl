@@ -1,11 +1,11 @@
 # Extracts the Data from Client Database/ Source
 
-import argparse
 import os
-from typing import List, Callable, Tuple
+from typing import List, Callable, Tuple, Optional
 import logging
 import glob
 import asyncio
+from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -288,4 +288,187 @@ class ExtractFromPostgres:
         await self._conn.close()
         
 
+class IncrementalExtractFromPostgres(ExtractFromPostgres):
+    """
+    Extended PostgreSQL extractor that fetches only new data based on fromDate/toDate.
+    Maintains a state file to track last extraction date for incremental loads.
+    """
+    
+    def __init__(
+        self,
+        host: str,
+        user: str,
+        password: str,
+        database: str,
+        table_name: Optional[str] = None,
+        chunk_size: Optional[int] = None,
+        schema_name: Optional[str] = None,
+        table_dir: Optional[str] = None,
+        port: Optional[int] = 5432,
+        state_file: str = ".last_extract.txt",
+        date_column_from: str = "fromDateTime",
+        date_column_to: str = "toDateTime"
+    ):
+        """
+        Initialize incremental PostgreSQL extractor.
+        
+        Parameters
+        ----------
+        host : str
+            PostgreSQL host
+        user : str
+            Database user
+        password : str
+            Database password
+        database : str
+            Database name
+        table_name : Optional[str]
+            Default table name
+        chunk_size : Optional[int]
+            Chunk size for data fetching
+        schema_name : Optional[str]
+            Schema name
+        table_dir : Optional[str]
+            Directory to save extracted data
+        port : Optional[int]
+            Database port (default: 5432)
+        state_file : str
+            File to store the last extraction timestamp
+        date_column_from : str
+            Column name for start date (default: "fromDate")
+        date_column_to : str
+            Column name for end date (default: "toDate")
+        """
+        super().__init__(
+            host=host,
+            user=user,
+            password=password,
+            database=database,
+            table_name=table_name,
+            chunk_size=chunk_size,
+            schema_name=schema_name,
+            table_dir=table_dir,
+            port=port
+        )
+        
+        self.state_file = state_file
+        self.date_column_from = date_column_from
+        self.date_column_to = date_column_to
+        self.last_extract_date = self._load_last_extract_date()
+    
+    def _load_last_extract_date(self) -> datetime:
+        """Load the last extraction date from state file."""
+        if os.path.exists(self.state_file):
+            with open(self.state_file, 'r') as f:
+                date_str = f.read().strip()
+                try:
+                    last_date = datetime.fromisoformat(date_str)
+                    logger.info("Loaded last extract date from state file: %s", last_date)
+                    return last_date
+                except ValueError:
+                    logger.warning("Invalid date in state file, using 7 days ago")
+        
+        # Default: 7 days ago if no state file exists
+        default_date = datetime.now() - timedelta(days=7)
+        logger.info("No state file found, using default date: %s", default_date)
+        return default_date
+    
+    def _save_last_extract_date(self, date: datetime):
+        """Save the extraction date to state file."""
+        with open(self.state_file, 'w') as f:
+            f.write(date.isoformat())
+        logger.info("Saved last extract date to state file: %s", date.isoformat())
+    
+    async def _fetch_chunks_of_data_from_db(self, table_name: str):
+        """
+        Override parent method to fetch only incremental data based on date range.
+        Fetches chunks of data where records fall within the date range.
+        """
+        current_date = datetime.now()
+        from_date = self.last_extract_date.date()
+        to_date = current_date.date()
+        
+        logger.info(
+            "Fetching incremental data from table=%s (date range: %s to %s)", 
+            table_name, from_date, to_date
+        )
+        
+        # Build the incremental query with date filters
+        if self.schema_name:
+            base_query = f'SELECT * FROM {self.schema_name}."{table_name}"'
+        else:
+            base_query = f'SELECT * FROM "{table_name}"'
+        
+        # Add WHERE clause for incremental extraction
+        # Captures records that:
+        # 1. Start within the period
+        # 2. End within the period
+        # 3. Span the entire period
+        incremental_query = f"""
+            {base_query}
+            WHERE (
+                ("{self.date_column_from}" >= '{from_date}' AND "{self.date_column_from}" < '{to_date}')
+                OR ("{self.date_column_to}" >= '{from_date}' AND "{self.date_column_to}" < '{to_date}')
+                OR ("{self.date_column_from}" < '{from_date}' AND "{self.date_column_to}" >= '{to_date}')
+            )
+        """
+        
+        _table_path = os.path.join(self.table_dir, table_name)
+        os.makedirs(_table_path, exist_ok=True)
+        
+        _buffer = []
+        chunk_idx = 0
+        total_rows = 0
+        
+        if self._conn:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+            
+            async with self._conn.transaction():
+                async for row in self._conn.cursor(incremental_query, prefetch=self._chunk_size):
+                    _buffer.append(dict(row))
+                    total_rows += 1
+                    
+                    if len(_buffer) >= self._chunk_size:
+                        logger.debug("Saving chunk=%s for table=%s", chunk_idx, table_name)
+                        table = pa.Table.from_pylist(_buffer)
+                        table_path = os.path.join(_table_path, f"{table_name}_chunk_{chunk_idx}.parquet")
+                        pq.write_table(table, table_path)
+                        chunk_idx += 1
+                        _buffer = []
+            
+            # Save final chunk if there's remaining data
+            if _buffer:
+                logger.info("Saving final chunk=%s for table=%s", chunk_idx, table_name)
+                table = pa.Table.from_pylist(_buffer)
+                file_path = os.path.join(_table_path, f"{table_name}_chunk_{chunk_idx}.parquet")
+                pq.write_table(table, file_path)
+            
+            logger.info("Extracted %d rows from table=%s", total_rows, table_name)
+            
+            # Track successfully extracted table
+            if table_name not in self.tables:
+                self.tables.append(table_name)
+        else:
+            raise Exception("No database connection established!")
+    
+    async def get_data(self, table_names: Optional[List[str]] = None):
+        """
+        Extract incremental data from specified tables.
+        Updates the state file after successful extraction.
+        
+        Parameters
+        ----------
+        table_names : Optional[List[str]]
+            List of table names to extract. If None, extracts all tables in schema.
+        """
+        extraction_start_time = datetime.now()
+        
+        # Call parent's get_data to handle connection and extraction
+        await super().get_data(table_names=table_names)
+        
+        # Update state file after successful extraction
+        self._save_last_extract_date(extraction_start_time)
+        
+        logger.info("Incremental extraction completed for tables: %s", self.tables)
 

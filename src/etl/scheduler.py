@@ -3,11 +3,12 @@ import uuid
 import time
 import logging
 import functools
-import pandas as pd
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Callable, Optional, Literal, DefaultDict, Generator, Any
+from typing import Callable, Optional, Literal, DefaultDict, Generator, Any, Dict
 from collections import defaultdict
+
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,12 @@ class Scheduler:
     Supports daily, hourly, and custom day/hour intervals.
     """
 
-    def __init__(self, days: Optional[int] = None, hours: Optional[int] = None):
+    def __init__(
+            self, 
+            days: Optional[int] = None, 
+            hours: Optional[int] = None,
+            metadata: Optional[Dict] = None
+    ):
         """
         _summary_
 
@@ -51,6 +57,8 @@ class Scheduler:
             _description_, by default None
         hours : Optional[int], optional
             _description_, by default None
+        metadata: Optional[Dict], optional
+            Metadata to use in scheduling
 
         Usage
         -----
@@ -67,6 +75,7 @@ class Scheduler:
             return "Backup complete!"
         ```
         """
+        self._metadata = metadata
         self._repeat_after_seconds_total = 0
         self._job_id = uuid.uuid4().hex[:10]
 
@@ -102,7 +111,7 @@ class Scheduler:
             )
         )
 
-        self._data = JobMetaData()
+        self._data = JobMetaData(metadata=self._metadata)
 
     # --- CORE LOGGING ----
     def _update_prev_jobs(self, job_name: str, start: float, end: float, schedule: str):

@@ -1,4 +1,5 @@
 import os
+import gc
 import logging
 from typing import Optional, Any, Dict, List, Union
 import asyncio
@@ -8,11 +9,12 @@ import polars as pl
 from . import extract
 from . import transform
 from . import load
+# from . import scheduler
 
 logger = logging.getLogger(__name__)
 
 
-class Etl:
+class _Etl:
     """High-level ETL orchestrator that coordinates Extract, Transform, and Load operations.
     
     Supports both single-table and multi-table ETL with table-specific transformations.
@@ -22,7 +24,8 @@ class Etl:
             self,
             extract: Optional[extract.Extract] = None,
             transform_pipe: Optional[Union[transform.TransformPipe, Dict[str, transform.TransformPipe]]] = None,
-            load: Optional[load.Load] = None
+            load: Optional[load.Load] = None,
+            # scheduler: Optional[scheduler.Scheduler] = None
     ):
         """Initialize the ETL pipeline with optional Extract, Transform, and Load components.
         
@@ -34,9 +37,12 @@ class Etl:
             Either a single TransformPipe or a dictionary mapping table names to their TransformPipes
         load : Optional[load.Load]
             The load component to write data to destination
+        scheduler: Optional[scheduler.Scheduler]
+            Scheduler to run jobs at fixed schedules
         """
         self._extract_subpipe = extract
         self._load_subpipe = load
+        # self._scheduler = scheduler
         
         # Handle both single transform and multi-table transforms
         if isinstance(transform_pipe, dict):
@@ -84,6 +90,7 @@ class Etl:
         self._pipe = " -> ".join(components)
         logger.info("ETL Pipeline created: %s", self._pipe)
 
+    # TODO: use scheduler here instead
     def run(
             self, 
             extract_params: Optional[dict] = None,
@@ -203,6 +210,7 @@ class Etl:
             logger.exception("ETL pipeline failed: %s", e)
             raise
 
+    # TODO: use scheduler here instead
     async def arun(
             self, 
             extract_params: Optional[dict] = None,
@@ -337,3 +345,123 @@ class Etl:
     def __repr__(self) -> str:
         """String representation of the ETL pipeline."""
         return f"Etl(pipeline={self._pipe}, tables={self.processed_tables})"
+    
+class Etl:
+    """
+    Wrapper class to run ETL with resilience features:
+    - Timeout handling
+    - Memory cleanup
+    - Connection pool management
+    - Graceful error recovery
+    """
+    
+    def __init__(
+        self,
+        extract: Optional[extract.Extract] = None,
+        transform_pipe: Optional[Union[transform.TransformPipe, Dict[str, transform.TransformPipe]]] = None,
+        load: Optional[load.Load] = None,
+        timeout_minutes: int = 120,
+        max_retries: int = 3
+    ):
+        """
+        Parameters
+        ----------
+        extract: extract.Extract, optional
+            Extract subpipe
+        transform_pipe: transform.TransformPipe or Dict, optional
+            Transform subpipe
+        load: load.Load, optional
+            Load subpipe
+        timeout_minutes : int
+            Maximum time allowed for ETL execution (default: 120 minutes)
+        max_retries : int
+            Maximum number of retries on failure (default: 3)
+        """
+        self.etl = _Etl(extract=extract, transform_pipe=transform_pipe, load=load)
+        self.timeout_seconds = timeout_minutes * 60
+        self.max_retries = max_retries
+    
+    async def run_with_timeout(
+        self,
+        extract_params: Optional[dict] = None,
+        transform_params: Optional[dict] = None,
+        load_params: Optional[dict] = None,
+        tables: Optional[List[str]] = None
+    ):
+        """
+        Run ETL with timeout protection.
+        
+        Returns
+        -------
+        Dict or None
+            ETL results if successful, None if timeout/failure
+        """
+        logger.info("=" * 70)
+        logger.info("Starting ETL execution with %d minute timeout", self.timeout_seconds // 60)
+        logger.info("=" * 70)
+        
+        try:
+            # Run with timeout
+            result = await asyncio.wait_for(
+                self.etl.arun(
+                    extract_params=extract_params,
+                    transform_params=transform_params,
+                    load_params=load_params,
+                    tables=tables
+                ),
+                timeout=self.timeout_seconds
+            )
+            
+            logger.info("ETL completed successfully")
+            return result
+            
+        except asyncio.TimeoutError:
+            logger.error("ETL execution TIMED OUT after %d minutes", self.timeout_seconds // 60)
+            logger.error("Consider increasing timeout or optimizing data processing")
+            return None
+            
+        except Exception as e:
+            logger.error("ETL execution FAILED: %s", e, exc_info=True)
+            return None
+        
+        finally:
+            # Force garbage collection to free memory
+            logger.info("Running garbage collection...")
+            gc.collect()
+    
+    async def run_with_retry(
+        self,
+        extract_params: Optional[dict] = None,
+        transform_params: Optional[dict] = None,
+        load_params: Optional[dict] = None,
+        tables: Optional[List[str]] = None
+    ):
+        """
+        Run ETL with automatic retry on failure.
+        
+        Returns
+        -------
+        Dict or None
+            ETL results if successful, None if all retries exhausted
+        """
+        for attempt in range(1, self.max_retries + 1):
+            logger.info("ETL Attempt %d of %d", attempt, self.max_retries)
+            
+            result = await self.run_with_timeout(
+                extract_params=extract_params,
+                transform_params=transform_params,
+                load_params=load_params,
+                tables=tables
+            )
+            
+            if result is not None:
+                logger.info("ETL succeeded on attempt %d", attempt)
+                return result
+            
+            if attempt < self.max_retries:
+                wait_seconds = 60 * attempt  # Exponential backoff: 60s, 120s, 180s
+                logger.warning("Retrying in %d seconds...", wait_seconds)
+                await asyncio.sleep(wait_seconds)
+            else:
+                logger.error("All %d retry attempts exhausted", self.max_retries)
+                return None
