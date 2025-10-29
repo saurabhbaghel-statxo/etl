@@ -1,0 +1,9 @@
+asyncpg
+fastapi
+polars
+psycopg2
+pyarrow
+pandas
+python-dotenv
+pydantic
+uvicorn
