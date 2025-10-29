@@ -17,3 +17,16 @@ wheels/
 
 # Files for Internal usage
 internal*
+
+# Text files
+*.txt
+
+# Table files
+*.xlsx
+*.csv
+
+# Log
+*.log
+
+# Environment
+.env

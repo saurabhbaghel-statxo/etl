@@ -94,7 +94,24 @@ class Extract(metaclass=_ExecutableMeta):
 
         # subclass run
         original_run = cls.run
-
+        if asyncio.iscoroutinefunction(original_run):
+            @wraps(original_run)
+            async def _extended_run(self, x, *args, **kwargs):
+                try:
+                    res = await original_run(self, x, *args, **kwargs)
+                    if self.output_option == ExtractOutputOptions.PERSIST:
+                        # data is being persisted permanently
+                        if isinstance(self, ExtractFromPostgres):
+                            logger.debug("%s completed. Data saved at %s", type(self), res)
+                        return res
+                    logger.debug("%s completed", self.__class__.__name__)
+                    return res
+                except Exception as exc:
+                    logger.exception("Exception while executing %s. %s", self.__class__.__name__, exc)
+            
+            cls.run = _extended_run
+            return 
+        
         @wraps(original_run)
         def _extended_run(self, x, *args, **kwargs):
             try:
@@ -793,7 +810,9 @@ class ExtractFromPostgres(Extract):
         for table in table_names:
             yield table
 
-    async def arun(self, table_names: List[str] | None = None):
+    async def arun(self, *args, **kwargs):
+        table_names = args[0]
+        logger.debug("Table Names in ExtractFromPostgres.arun=%s", table_names)
         try:
             await self.get_connection()
             logger.info("Database connected.")
@@ -819,7 +838,9 @@ class ExtractFromPostgres(Extract):
     
         await self._conn.close()
 
-    def run(self, *args, **kwargs) -> str:
+        return os.path.join(self._table_dir, table_names[0])
+
+    async def run(self, *args, **kwargs) -> str:
         logger.warning("%s only has asynchronous run. " \
         "So, running this asynchronously", self.__class__.__name__)
         table_names = args[0]
@@ -827,7 +848,7 @@ class ExtractFromPostgres(Extract):
             raise TypeError(f"Arguments provided={args}." 
                             f"`table_names = {args[0]}`"
                             "`table_names` should be list of table names.")
-        asyncio.run(self.arun(table_names=table_names))
+        await self.arun(table_names=table_names)
         return os.path.join(self._table_dir, table_names[0])    # TODO: Generalize this for more tables 
         
 

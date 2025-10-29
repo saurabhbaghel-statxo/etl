@@ -2419,8 +2419,11 @@ class ConditionalColumnTransform(Transform):
         for condition, value in zip(self._conditions[1:], self._then_values[1:]):
             expr = expr.when(condition).then(value)
         
-        expr = expr.otherwise(self._otherwise_value)
+        if self._otherwise_value:
+            expr = expr.otherwise(self._otherwise_value)
         
+        logger.debug("Conditional column transform expression=%s", str(expr))
+        print(f"Conditional column transform expression={str(expr)}")
         return expr.alias(self._alias)
     
     async def arun(self, df: pl.DataFrame) -> pl.DataFrame:

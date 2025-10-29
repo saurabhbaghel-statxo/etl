@@ -128,7 +128,7 @@ class Runner(metaclass=_ExecutableMeta):
         across multiple runs or to customize execution behavior.
         """
 
-    def run(self, x, *args, **kwargs):
+    async def run(self, x, *args, **kwargs):
         """
         Execute all runnables in sequence according to the execution policy.
         
@@ -183,7 +183,7 @@ class Runner(metaclass=_ExecutableMeta):
             self.executor = Executor(_policy)
         
         # execute the runnables
-        y = self.executor.execute(self.runnables, x, *args, **kwargs)
+        y = await self.executor.execute(self.runnables, x, *args, **kwargs)
 
         # successfuly completed runnables
         _successful_runnables = [

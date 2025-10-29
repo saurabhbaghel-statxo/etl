@@ -33,16 +33,18 @@ class Executor:
     async def _call_arun_executable(self, runnable, x, *args, **kwargs):
         return await runnable.arun(x, *args, **kwargs)
 
-    def _execute_single_runnable(self, runnable, x, *args, **kwargs):
+    async def _execute_single_runnable(self, runnable, x, *args, **kwargs):
         logger.debug("Executing: %s", runnable)
         if runnable.status in ["queued", "inactive"]:
             runnable.status = "in_progress"
         try:
-            if asyncio.coroutines.iscoroutinefunction(runnable.run):
-                y = asyncio.run(self._call_arun_executable(
+            if asyncio.coroutines.iscoroutinefunction(runnable.executable.run): 
+                # NOTE: Have temporarily made this runnable.run -> runnable.executable.run
+                # TODO: Check the difference
+                y = await self._call_arun_executable(
                     runnable, x, *args, **kwargs
                     )
-                )
+
             else:
                 y = self._call_run_executable(runnable, x, *args, **kwargs)
             
@@ -58,22 +60,22 @@ class Executor:
     
 
 
-    def _execute_runnables_single_chain(self, runnables: List, x, *args, **kwargs):
+    async def _execute_runnables_single_chain(self, runnables: List, x, *args, **kwargs):
         while runnables:
             # TODO: check runnable and allocate resource 
             runnable = runnables.pop(0) # get the first one
-            x = self._execute_single_runnable(runnable, x, *args, **kwargs)
+            x = await self._execute_single_runnable(runnable, x, *args, **kwargs)
         return x       
 
 
-    def execute(self, runnables: List, x: Optional[List], *args, **kwargs) -> Generator:
+    async def execute(self, runnables: List, x: Optional[List], *args, **kwargs) -> Generator:
         from .policy import PolicyOptions
         
         logger.info("Policy=%s", self._policy)
         if self._policy == PolicyOptions.default:
             # execute the runnables one by one
             # also, the take the input one by one
-            return self._execute_runnables_single_chain(runnables, x, *args, **kwargs)
+            return await self._execute_runnables_single_chain(runnables, x, *args, **kwargs)
         
         if self._policy == PolicyOptions.compute_optimized:
             logger.error("Compute Optimized policy not implemented yet.")

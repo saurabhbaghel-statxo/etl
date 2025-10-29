@@ -573,6 +573,7 @@ class Etl(_runner.Runner):
         """
         assert self.extract_or_transform_or_load_present(), "None of the Extract, Transform or Load pipeline is present"
     
+
     def extract_or_transform_or_load_present(self) -> bool:
         """
         Check if any runnable is an Extract, Transform, or Load operation.
@@ -643,7 +644,7 @@ class Etl(_runner.Runner):
         # else:
         return super().run(x, *args, **kwargs)
 
-    def run(self, x, *args, **kwargs):
+    async def run(self, x, *args, **kwargs):
         """
         Execute the ETL pipeline sequentially.
         
@@ -684,5 +685,5 @@ class Etl(_runner.Runner):
                 # x now becomes a table for next transforms
             # x = curr_runnable.run(x, *args, **kwargs)
         # x is tables' names List[str]
-        y = super().run(x, *args, **kwargs)
+        y = await super().run(x, *args, **kwargs)
         return y
