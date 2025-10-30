@@ -1,8 +1,16 @@
 import os
-from typing import List, Tuple, Protocol, Optional
+from typing import (
+    List, 
+    Tuple, 
+    Protocol, 
+    Optional, 
+    Literal, 
+    Union
+)
 import logging
 import asyncio
 import uuid
+from functools import wraps
 
 import asyncpg
 import psycopg2
@@ -11,6 +19,7 @@ from psycopg2.extras import execute_values
 import polars as pl
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -69,23 +78,49 @@ from . import executable
 from . import exceptions
 
 class Load(metaclass=executable._ExecutableMeta):
-    _load_registry_ = {}
-    def __new__(mcls, name, bases, namespace, /, **kwargs):
-        subcls = super().__new__(mcls, name, bases, namespace, **kwargs)
-        name = name or subcls.__name__
-        mcls._load_registry_[name] = name
-        return subcls
+    _registry_ = {}
+    
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        name = kwargs.get("name", cls.__name__)
+        
+        cls._can_be_applied_to_chunk_ = True
+
+        # wrap the run() of subclasses, since the input could be a dataframe
+        # or a table path
+        Load._wrap_subclass_run(cls)
+
+        logger.info(f"Registering {name} as an Loading Method.")
+        Load._registry_[name] = cls
     
     @classmethod
     def get_transform(mcls, name: str):
-        if name not in mcls._load_registry_:
-            raise exceptions.FunctionalityNotFoundError(f"Transform {name} not found")
-        return mcls._load_registry_.get(name)
+        if name not in mcls._registry_:
+            raise exceptions.FunctionalityNotFoundError(f"Load Method {name} not found")
+        return mcls._registry_.get(name)
+
+    def _wrap_subclass_run(cls):
+        # to wrap the run of subclass
+        original_run = cls.run
+
+        @wraps(original_run)
+        def _extended_run(self, x: Union[pl.DataFrame, str, pd.DataFrame], *args, **kwargs):
+            df = Load._check_input(x)
+            return original_run(self, df, *args, **kwargs)
+        
+        cls.run = _extended_run
+    
+    def _check_input(x: Union[pl.DataFrame, str, pd.DataFrame]) -> pl.DataFrame:
+        if isinstance(x, pd.DataFrame): 
+            return pl.DataFrame(x)
+        elif isinstance(x, pl.DataFrame):
+            return x
+        elif isinstance(x, str):
+            return pl.read_parquet(x)
+        raise TypeError("Transform input should be either table path or table itself")
     
 
-
-
-class _LoadParquetInMemory:
+class _LoadParquetFromPath:
     _path_is_directory_parquet_files = False
     _path_is_single_parquet_file = False
 
@@ -133,6 +168,47 @@ class _LoadParquetInMemory:
         elif self._path_is_single_parquet_file:
             _chunk = self._read_one_chunk_file(self._path)
             yield _chunk
+
+
+class _LoadParquetFromBuffer:
+    _is_chunks_of_parquet_files = False
+    _is_single_parquet_file = False
+
+    def __init__(self, parquet_in_buffer):
+        """
+        _summary_
+
+        Parameters
+        ----------
+        path : str
+            Could be a path to a single parquet file. 
+            Or a directory containing many parquet files
+        """
+        self._parquet_in_buffer = parquet_in_buffer
+
+    async def aload_data(self):
+        """Is a generator. Loads data into memory.
+        Data chunk will be used by downstream tasks like loading the data into postgres db."""
+        if self._path_is_directory_parquet_files:
+            # we have a directory containing many parquet files
+            # we shall read and load them one by one
+            for chunk_file in os.listdir(self._path):
+                _chunk = self._read_one_chunk_file(os.path.join(self._path, chunk_file))
+                yield _chunk
+        elif self._path_is_single_parquet_file:
+            _chunk = self._read_one_chunk_file(self._path)
+            yield _chunk
+    
+    def _read_one_chunk_file(self, chunk_file_path: str) -> ChunkData:
+        return ChunkData.read_from_path(chunk_file_path)
+    
+    def load_data(self):
+        """Is a generator. Loads data into memory.
+        Data chunk will be used by downstream tasks like loading the data into postgres db."""
+        # TODO: loading all at once, highly undesirable, will change in coming iterations
+        yield self._parquet_in_buffer   
+
+
 
 # class LoadToPostgres(Load):
 #     def __init__(
@@ -334,7 +410,82 @@ class _LoadParquetInMemory:
 #         finally:
 #             if conn:
 #                 await conn.close()
+class LoadToExcel(Load):
+    """
+    Saves a Polars DataFrame to disk as Parquet, Excel, or CSV.
 
+    The output path is defined during initialization, so at runtime you only
+    need to call `.run(df)` without specifying any path.
+    """
+
+    def __init__(
+        self,
+        output_path: str,
+        save_type: Literal["parquet", "excel", "csv"] = "parquet",
+        overwrite: bool = True,
+    ):
+        """
+        Args:
+            output_path: Full path (without extension) or directory path where data should be saved.
+            save_type: One of 'parquet', 'excel', 'csv'.
+            overwrite: Whether to overwrite an existing file.
+        """
+        self._save_type = save_type.lower()
+        self._output_path = output_path
+        self._overwrite = overwrite
+
+        match self._save_type:
+            case "excel":
+                self._extension = ".xlsx"
+            case "csv":
+                self._extension = ".csv"
+            case "parquet":
+                self._extension = ".parquet"
+            case _:
+                raise ValueError(f"Unsupported save type: {save_type}")
+
+        # ensure directory exists
+        os.makedirs(os.path.dirname(self._output_path), exist_ok=True)
+
+    def _get_full_output_path(self) -> str:
+        """Constructs the final file path with extension."""
+        if not self._output_path.endswith(self._extension):
+            full_path = self._output_path + self._extension
+        else:
+            full_path = self._output_path
+
+        if os.path.exists(full_path) and not self._overwrite:
+            raise FileExistsError(f"File already exists: {full_path}")
+
+        return full_path
+
+    def run(
+        self,
+        df: pl.DataFrame,
+        batch_size: Optional[int] = None,
+    ) -> str:
+        """
+        Saves the given DataFrame to the configured output path.
+        """
+        output_path = self._get_full_output_path()
+
+        logger.debug(
+            f"Saving DataFrame ({df.height} rows, {len(df.columns)} cols) "
+            f"to {output_path} as {self._save_type.upper()}"
+        )
+
+        if self._save_type == "parquet":
+            df.write_parquet(output_path)
+
+        elif self._save_type == "csv":
+            df.write_csv(output_path)
+
+        elif self._save_type == "excel":
+            # Polars doesn’t support Excel export natively → use pandas
+            df.to_pandas().to_excel(output_path, index=False)
+
+        logger.info(f"Data successfully saved at: {output_path}")
+        return output_path
 
 class LoadToPostgres(Load):
     def __init__(
@@ -427,7 +578,7 @@ class LoadToPostgres(Load):
 
     def run(
             self, 
-            path: str,
+            x: Union[pl.DataFrame | str] = None, # used when table is already stored somewhere
             table_name: Optional[str] = None,
             batch_size: Optional[int] = 10_000
     ):
@@ -436,9 +587,12 @@ class LoadToPostgres(Load):
 
         self._table = self._table or table_name
         
-        # loading parquet file into the memory
-        _parquet_loader = _LoadParquetInMemory(path)
-        
+        if type(x) is str:
+            # loading parquet file into the memory
+            _parquet_loader = _LoadParquetFromPath(x)
+            
+        elif type(x) is pl.DataFrame:
+            _parquet_loader = _LoadParquetFromBuffer(x)
         conn = None
 
         try:
@@ -498,7 +652,7 @@ class LoadToPostgres(Load):
             self._table = table_name
                     
         # loading parquet file into the memory
-        _parquet_loader = _LoadParquetInMemory(path)
+        _parquet_loader = _LoadParquetFromPath(path)
         
         try:
             conn = await asyncpg.connect(

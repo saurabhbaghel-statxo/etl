@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [0.1.0 nightly] - 29-10-2025
+## [0.1.0] - 29-10-2025
 
 ### Added
 - Executable meta class
@@ -31,3 +31,16 @@
 - Conditional column transform
 - Load base class
 - Load to postgres
+
+
+## [0.1.1] - 30-10-2025
+
+### Changed
+- Add thin wrapper to base load class to enable load methods handle both path of table and dataframe alike
+- Rename `_LoadParquetInMemory()` to `_LoadParquetFromPath`
+
+
+### Added 
+- Loading method from parquet already present in buffer instead of getting it path - `_LoadParquetFromBuffer()`
+- Extraction method from excel files (.xlsx, .csv, .parquet) - `ExtractFromFile()`
+- Add duplicate row remover trasnform - `DropDuplicates()`

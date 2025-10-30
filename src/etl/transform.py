@@ -1820,14 +1820,16 @@ class Transform(metaclass=executable._ExecutableMeta):
         
         cls.run = _extended_run
 
-
-    def _check_input(x: Union[pl.DataFrame, str, pd.DataFrame]) -> pl.DataFrame:
+    def _check_input(x: Union[pl.DataFrame, str, pd.DataFrame, List[str]]) -> pl.DataFrame:
         if isinstance(x, pd.DataFrame): 
             return pl.DataFrame(x)
         elif isinstance(x, pl.DataFrame):
             return x
         elif isinstance(x, str):
             return pl.read_parquet(x)
+        elif isinstance(x, list) and all(type(ele) is str for ele in x):
+            # for now it can be only Join transform
+            return [pl.read_parquet(table) for table in x]
         raise TypeError("Transform input should be either table path or table itself")
     
 class RenameColumns(Transform):
@@ -2020,7 +2022,6 @@ class FlattenDictColumn(Transform):
 
             return res
             
-
 
 class FilterByUniqueGroupCount(Transform):
     """
@@ -2235,12 +2236,22 @@ class JoinDataFrames(Transform):
         self._on = on
         self._how = how
 
-    async def arun(self, left_df: pl.DataFrame, right_df: pl.DataFrame) -> pl.DataFrame:
-        return left_df.join(right_df, on=self._on, how=self._how)
+    async def arun(self, xs: List[pl.DataFrame]) -> pl.DataFrame:
+        if len(xs) > 2:
+            raise NotImplementedError()
+        # TODO: implement for more tables at once
+        # for now just two dataframes
+        a, b = xs
+        return a.join(b, on=self._on, how=self._how)
     
-    def run(self, left_df: pl.DataFrame, right_df: pl.DataFrame) -> pl.DataFrame:
-        return left_df.join(right_df, on=self._on, how=self._how)
-
+    def run(self, xs: List[pl.DataFrame]) -> pl.DataFrame:
+        if len(xs) > 2:
+            raise NotImplementedError()
+        # TODO: implement for more tables at once
+        
+        # for now just two dataframes
+        a, b = xs
+        return a.join(b, on=self._on, how=self._how)
 
 class MapElements(Transform):
     """
@@ -2434,6 +2445,53 @@ class ConditionalColumnTransform(Transform):
         expr = self._build_conditional_expression()
         return df.with_columns(expr)
 
+
+class DropDuplicates(Transform):
+    """
+    Removes duplicate rows from the DataFrame based on specified columns.
+    """
+    
+    __name__ = "drop_duplicates"
+    
+    def __init__(
+            self,
+            subset: Optional[Union[str, List[str]]] = None,
+            keep: str = "first",
+            maintain_order: bool = True
+    ):
+        """
+        Initialize the DropDuplicates transform.
+        
+        Args:
+            subset: Column name(s) to consider for identifying duplicates.
+                   If None, all columns are used.
+            keep: Which duplicates to keep. Options: "first", "last", "none".
+                 "first" keeps the first occurrence, "last" keeps the last,
+                 "none" removes all duplicates.
+            maintain_order: Whether to maintain the original row order.
+        """
+        self._subset = subset
+        self._keep = keep
+        self._maintain_order = maintain_order
+        
+        if keep not in ["first", "last", "none"]:
+            raise ValueError("keep must be one of 'first', 'last', or 'none'")
+
+    async def arun(self, df: pl.DataFrame) -> pl.DataFrame:
+        df = df.unique(
+            subset=self._subset,
+            keep=self._keep,
+            maintain_order=self._maintain_order
+        )
+        return df
+    
+    def run(self, df: pl.DataFrame) -> pl.DataFrame:
+        df = df.unique(
+            subset=self._subset,
+            keep=self._keep,
+            maintain_order=self._maintain_order
+        )
+        return df
 
 # class TransformParquet:
 #     def __init__(

@@ -1,7 +1,7 @@
 # Extracts the Data from Client Database/ Source
 
 import os
-from typing import List, Callable, Tuple, Optional
+from typing import List, Callable, Tuple, Optional, Dict, Any, Union
 import logging
 import glob
 import asyncio
@@ -850,7 +850,137 @@ class ExtractFromPostgres(Extract):
                             "`table_names` should be list of table names.")
         await self.arun(table_names=table_names)
         return os.path.join(self._table_dir, table_names[0])    # TODO: Generalize this for more tables 
-        
+
+
+class ExtractFromFile(Extract):
+    """
+    Generic file extractor supporting Excel, CSV, and Parquet formats.
+
+    Returns a Polars DataFrame or list of DataFrames if chunking is enabled.
+    """
+
+    __name__ = "extract_from_file"
+
+    def __init__(
+        self,
+        file_path: str,
+        sheet_name: Optional[str] = None,
+        columns: Optional[List[str]] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        chunk_size: Optional[int] = None,
+        has_header: bool = True,
+        delimiter: str = ",",
+        encoding: str = "utf8",
+    ):
+        """
+        Args:
+            file_path: Path to the Excel, CSV, or Parquet file.
+            sheet_name: (Excel only) Sheet to extract. Defaults to the first sheet.
+            columns: List of column names to select.
+            filters: Dictionary of column filters, e.g. {"country": "US"}.
+            chunk_size: If specified, splits the DataFrame into chunks of given size.
+            has_header: For CSV files, whether the first row is a header.
+            delimiter: CSV delimiter.
+            encoding: Encoding for text-based files.
+        """
+        self.file_path = file_path
+        self.sheet_name = sheet_name
+        self.columns = columns
+        self.filters = filters or {}
+        self.chunk_size = chunk_size
+        self.has_header = has_header
+        self.delimiter = delimiter
+        self.encoding = encoding
+
+
+    def _validate_file(self):
+        if not os.path.exists(self.file_path):
+            raise FileNotFoundError(f"File not found: {self.file_path}")
+
+        self._ext = os.path.splitext(self.file_path)[1].lower()
+
+        valid_extensions = {
+            ".xlsx": "Excel",
+            ".xls": "Excel",
+            ".csv": "CSV",
+            ".parquet": "Parquet",
+        }
+
+        if self._ext not in valid_extensions:
+            raise ValueError(
+                f"Invalid file type for {self.file_path}. "
+                f"Supported types are: {', '.join(valid_extensions.keys())}"
+            )
+
+        self._file_type = valid_extensions[self._ext]
+        logger.debug(f"Validated {self._file_type} file: {self.file_path}")
+
+
+    def _read_file(self) -> pl.DataFrame:
+        if self._ext in (".xlsx", ".xls"):
+            return pl.read_excel(source=self.file_path, sheet_name=self.sheet_name)
+
+        elif self._ext == ".csv":
+            return pl.read_csv(
+                self.file_path,
+                has_header=self.has_header,
+                separator=self.delimiter,
+                encoding=self.encoding,
+            )
+
+        elif self._ext == ".parquet":
+            return pl.read_parquet(self.file_path)
+
+        raise ValueError(f"Unsupported file type: {self._ext}")
+
+
+    def _apply_filters(self, df: pl.DataFrame) -> pl.DataFrame:
+        for col, val in self.filters.items():
+            if col in df.columns:
+                df = df.filter(pl.col(col) == val)
+            else:
+                logger.warning(f"Filter column {col} not found in file {self.file_path}")
+        return df
+
+
+    async def run(self, x=None, *args, **kwargs) -> Union[pl.DataFrame, List[pl.DataFrame]]:
+        """
+        Extracts data from the specified file into a Polars DataFrame.
+        Supports Excel, CSV, and Parquet formats.
+        """
+        self._validate_file()
+        logger.debug(f"Starting extraction: {self.file_path}")
+
+        # Read the file asynchronously
+        df = await asyncio.to_thread(self._read_file)
+
+        # Column selection
+        if self.columns:
+            missing = [c for c in self.columns if c not in df.columns]
+            if missing:
+                logger.warning(f"Columns {missing} not found in {self.file_path}")
+            df = df.select([c for c in self.columns if c in df.columns])
+
+        # Apply filters
+        if self.filters:
+            df = self._apply_filters(df)
+
+        # Return chunks if requested
+        if self.chunk_size:
+            total_rows = df.height
+            chunks = [
+                df[i : i + self.chunk_size] for i in range(0, total_rows, self.chunk_size)
+            ]
+            logger.debug(f"Returning {len(chunks)} chunks from {self.file_path}")
+            return chunks
+
+        logger.debug(
+            f"Extraction complete for {self.file_path} "
+            f"(rows={df.height}, cols={len(df.columns)})"
+        )
+        return df
+
+
 
 class IncrementalExtractFromPostgres(ExtractFromPostgres):
     """
