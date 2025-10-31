@@ -1820,17 +1820,26 @@ class Transform(metaclass=executable._ExecutableMeta):
         
         cls.run = _extended_run
 
-    def _check_input(x: Union[pl.DataFrame, str, pd.DataFrame, List[str]]) -> pl.DataFrame:
+    def _check_input(x: Union[pl.DataFrame, str, pd.DataFrame, List[Union[str, pl.DataFrame]]]) -> pl.DataFrame:
         if isinstance(x, pd.DataFrame): 
             return pl.DataFrame(x)
         elif isinstance(x, pl.DataFrame):
             return x
         elif isinstance(x, str):
             return pl.read_parquet(x)
-        elif isinstance(x, list) and all(type(ele) is str for ele in x):
+        elif isinstance(x, list):
+            _ins = []
             # for now it can be only Join transform
-            return [pl.read_parquet(table) for table in x]
-        raise TypeError("Transform input should be either table path or table itself")
+            for table in x:
+                if type(table) is str:
+                    _ins.append(pl.read_parquet(table))
+                elif type(table) is pl.DataFrame:
+                    _ins.append(table)
+                else:
+                    raise NotImplementedError()
+            return _ins
+        else:
+            raise TypeError("Transform input should be either table path or table itself")
     
 class RenameColumns(Transform):
     """

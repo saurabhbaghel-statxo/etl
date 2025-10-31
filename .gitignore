@@ -1,32 +1,86 @@
-# Python-generated files
+# ----------------------------
+# Python
+# ----------------------------
 __pycache__/
-*.py[oc]
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.dll
+*.dylib
+
+# Byte-compiled / distribution / packaging
 build/
 dist/
 wheels/
-*.egg-info
+*.egg-info/
+.eggs/
 
+# ----------------------------
 # Virtual environments
-.venv
+# ----------------------------
+.venv/
+venv/
+env/
 
-# Jupyter Notebook
-*.ipynb
+# ----------------------------
+# IDE / Editor
+# ----------------------------
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
 
-# Parquet files
-*.parquet
-
-# Files for Internal usage
-internal*
-
-# Text files
-*.txt
-
-# Table files
-*.xlsx
-*.csv
-
-# Log
+# ----------------------------
+# Logs & Debug
+# ----------------------------
+logs/
 *.log
+*.out
+*.err
 
-# Environment
+# ----------------------------
+# Environment / Config
+# ----------------------------
 .env
+.env.*
+*.ini
+*.cfg
+dotenv.py
+dotenv/
+*_dotenv_local.py
+
+# ----------------------------
+# Data files
+# ----------------------------
+*.parquet
+*.csv
+*.xlsx
+*.tsv
+*.jsonl
+
+# ----------------------------
+# Jupyter / notebooks
+# ----------------------------
+*.ipynb
+.ipynb_checkpoints/
+
+# ----------------------------
+# Internal / Project-specific
+# ----------------------------
+internal*
+notebooks/
+tmp/
+cache/
+__temp__/
+data/
+extras/
+
+# --------------------------
+# Testing / Typing
+# --------------------------
+.mypy_cache
+.test
+test/
+tests/output/
+

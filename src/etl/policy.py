@@ -30,7 +30,7 @@ class Policy:
         """
         self._policy_option = policy_option
 
-    def rearrange_runnables(self, runnables: List, *args, **kwargs):
+    def rearrange_runnables(self, runnables: List, *args, **kwargs) -> List:
         """Rearranges the runnables according to the policy"""
 
         if self._policy_option == PolicyOptions.default:
@@ -38,10 +38,13 @@ class Policy:
             # take the list of the runnables as is
             return runnables
         
-    def __repr__(self):
+    def __repr__(self) -> str:
         return f"{self._policy_option}"
     
-    def __eq__(self, other: Union["Policy", PolicyOptions]):
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, (Policy, PolicyOptions)):
+            return NotImplemented
+        
         if type(other) is PolicyOptions:
             return self._policy_option == other
         else:
