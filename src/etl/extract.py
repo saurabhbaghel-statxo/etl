@@ -586,7 +586,8 @@ class ExtractFromPostgres(Extract):
             chunk_size: int | None = None,
             schema_name: str | None = None,
             table_dir: str | None = None,
-            port: int |  None = 5432
+            port: int |  None = 5432,
+            metadata_handler: MetadataHandler | None = None
     ):
         self._host = host
         self._user = user
@@ -596,6 +597,7 @@ class ExtractFromPostgres(Extract):
         self._port = port
         self._schema_name = schema_name
         self._table_dir = table_dir
+        self._metadata_handler = metadata_handler
 
         # ensuring we have a chunk size
         try:
@@ -609,6 +611,24 @@ class ExtractFromPostgres(Extract):
             self._chunk_size = 50_000
 
         self.tables = []    # holds names of the tables which have been successfuly extracted
+
+        # metadata
+        if self._metadata_handler:
+            try:
+                self._last_extracted_data = self._metadata_handler._metadata[-1]
+            except IndexError:
+                # no data present
+                self._last_extracted_data = None
+
+            if self._last_extracted_data:
+                if not self._last_extracted.get("data_type") == MetadataTypes.TABULAR:
+                    raise Exception("Last saved metadata is not of a table")
+
+                # if last from the prev stored metadata is extracted
+                # update the starting row as the ending row + 1 of the last extracted data 
+                self._starting_row = self._last_extracted["content"]["row_end"] + 1 # last row of the last data
+      
+
 
     @property
     def host(self):
@@ -796,6 +816,9 @@ class ExtractFromPostgres(Extract):
             chunk_idx = 0
             _row_count = 0
 
+            # for metadata
+            date_started = datetime.now()
+
             # using asyncpg for PostgreSQL
             async with self._conn.transaction():
                 async for row in self._conn.cursor(query, prefetch=self._chunk_size):
@@ -820,6 +843,27 @@ class ExtractFromPostgres(Extract):
                 table = pa.Table.from_pylist(_buffer)
                 file_path = os.path.join(_table_path, f"{table_name}_chunk_{chunk_idx}.parquet")
                 pq.write_table(table, file_path)  
+            
+            # for metadata
+            date_ended = datetime.now()
+
+            # write metadata
+            _m = {   
+                    "date_started": date_started,
+                    "date_ended": date_ended,
+                    "data_type": MetadataTypes.TABULAR.value,
+                    "src_data": self._host,
+                    "des_data": _table_path,
+                    "content": {
+                        "row_start": start_row,
+                        "row_end": end_row
+                    }
+                }
+            logger.info("Metadata = %s", str(_m))
+            self._metadata_handler.write(**_m)
+
+            logger.info("Metadata written at=%s", self._metadata_handler.file)            
+
         else:
             raise Exception("No connection!")
                 
@@ -1256,8 +1300,6 @@ class IncrementalExtractFromPostgresRowWise(ExtractFromPostgres):
         data_metadata : Union[str, Path], optional
             _description_, by default ".data.metadata"
         """
-        # initialize postgres funcitonality
-        super().__init__(**kwargs)
 
         # inititalize starting row
         self._starting_row = row_start
@@ -1267,6 +1309,10 @@ class IncrementalExtractFromPostgresRowWise(ExtractFromPostgres):
         self._metadata_path = Path(data_metadata)
 
         self.metadata_handler = MetadataHandler(data_metadata)
+    
+        kwargs.update({"metadata_handler": self.metadata_handler})    
+        # initialize postgres funcitonality
+        super().__init__(**kwargs)
         
         try:
             self._last_extracted = self.metadata_handler._metadata[-1]

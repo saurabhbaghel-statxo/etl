@@ -5,18 +5,18 @@ from datetime import datetime
 from pathlib import Path
 import json
 import logging
-from enum import Enum
+from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 logger = logging.getLogger(__name__)
 
-class MetadataTypes(Enum):
-    TABULAR = 1
+class MetadataTypes(StrEnum):
+    TABULAR = "tabular"
     '''When the data is in columnar, tabular format'''
 
-    TEXT_FILE = 2
+    TEXT_FILE = "text"
     '''When the data is in text format, human readable'''
 
 
@@ -52,8 +52,17 @@ class Metadata(BaseModel):
     dest_data: Optional[str] = None
     '''Destination of data, file-path, database-url, etc'''
 
-    content: Optional[Union[Dict]] = Field(default_factory=dict)
+    content: Optional[Dict] = Field(default_factory=dict)
     '''Info about the content of the data for which this is the metadata'''
+
+    @field_validator("date_started", "date_ended")
+    @classmethod
+    def validate_datetime(cls, v):
+        if v is None:
+            return v
+        if isinstance(v, datetime):
+            return v.isoformat()  # or str(v)
+        return v
 
 
 class MetadataHandler:
