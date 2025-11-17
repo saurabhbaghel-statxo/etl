@@ -44,3 +44,16 @@
 - Loading method from parquet already present in buffer instead of getting it path - `_LoadParquetFromBuffer()`
 - Extraction method from excel files (.xlsx, .csv, .parquet) - `ExtractFromFile()`
 - Add duplicate row remover trasnform - `DropDuplicates()`
+
+
+## [0.1.2] - 17-11-2025
+
+### Changed
+- Made the Extraction row wise. Now we can select the starting and ending row within which the data is to be extracted.
+
+
+### Added
+- A metadata handler `MetadataHandler`, this will read already saved metadata and write 
+- An enum of data types `MetadataTypes`
+- A tabular data type content `TabularData` for metadata 
+- 

@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from functools import wraps
 from enum import Enum
+from pathlib import Path
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
 import pandas as pd
@@ -20,6 +22,7 @@ import pyarrow.parquet as pq
 import asyncpg
 
 from . import common
+from .metadata_handler import MetadataHandler, MetadataTypes
 
 
 load_dotenv()
@@ -572,7 +575,6 @@ class Extract(metaclass=_ExecutableMeta):
 
 class ExtractFromPostgres(Extract):
     """This class should be initialized only once.
-    
     This will keep a track of the tables that have been successfuly extracted."""
     def  __init__(
             self,
@@ -739,18 +741,51 @@ class ExtractFromPostgres(Extract):
         
         # return conn.cursor(cursor_factory=cursor_factory)
 
-      
-    async def _fetch_chunks_of_data_from_db(self, table_name: str):
+        
+    async def _fetch_chunks_of_data_from_db(
+        self, 
+        table_name: str, 
+        start_row: int = None, 
+        end_row: int = None
+    ):
         """Gives chunks of data from the database.
         Each chunk will be saved as a single parquet file.
+        
+        Args:
+            table_name: Name of the table to fetch data from
+            start_row: Optional starting row number (1-indexed, inclusive)
+            end_row: Optional ending row number (1-indexed, inclusive)
         """
 
+        # Build the base query
         if self.schema_name: 
-            query = f"SELECT * FROM {self.schema_name}.{table_name}"
+            base_query = f"SELECT * FROM {self.schema_name}.{table_name}"
         else:
-            query = f"SELECT * FROM {table_name}"
-
-        logger.info("Fetching chunks from table=%s", table_name)
+            base_query = f"SELECT * FROM {table_name}"
+        
+        # Add LIMIT and OFFSET if start_row or end_row is provided
+        if start_row is not None or end_row is not None:
+            offset = (start_row - 1) if start_row else 0
+            
+            if start_row and end_row:
+                limit = end_row - start_row + 1
+            elif end_row:
+                limit = end_row
+            else:
+                limit = None
+            
+            if limit is not None:
+                query = f"{base_query} LIMIT {limit} OFFSET {offset}"
+            else:
+                query = f"{base_query} OFFSET {offset}"
+            
+            logger.info(
+                "Fetching chunks from table=%s with start_row=%s, end_row=%s (LIMIT=%s, OFFSET=%s)", 
+                table_name, start_row, end_row, limit, offset
+            )
+        else:
+            query = base_query
+            logger.info("Fetching all chunks from table=%s", table_name)
 
         _table_path = os.path.join(self.table_dir, table_name)
         os.makedirs(_table_path, exist_ok=True)  # ensure the directory for the table exists
@@ -759,12 +794,16 @@ class ExtractFromPostgres(Extract):
 
         if self._conn:
             chunk_idx = 0
+            _row_count = 0
 
-            # using asyncpg
+            # using asyncpg for PostgreSQL
             async with self._conn.transaction():
                 async for row in self._conn.cursor(query, prefetch=self._chunk_size):
                     _buffer.append(dict(row))
-                    logger.debug("Row appended=%s", row)
+                    
+                    if (_row_count+1) % int(self._chunk_size / 10) == 0:
+                        logger.debug("Row appended=%s", row)
+
                     if len(_buffer) >= self._chunk_size:
                         logger.debug("Saving Chunk=%s for Table=%s", chunk_idx, table_name)
                         table = pa.Table.from_pylist(_buffer)
@@ -774,7 +813,8 @@ class ExtractFromPostgres(Extract):
                         chunk_idx += 1
                         
                         _buffer = []    # resetting buffer as empty list
-            
+                    _row_count += 1
+
             if _buffer:
                 logger.info("Saving Final Chunk=%s for Table=%s", chunk_idx, table_name)
                 table = pa.Table.from_pylist(_buffer)
@@ -786,7 +826,7 @@ class ExtractFromPostgres(Extract):
         # write for psycopg2
         # if cursor
 
-    async def _get_data_one_table(self, table_name: str | None = None):
+    async def _get_data_one_table(self, table_name: str | None = None, *args, **kwargs):
 
         if (table_name and self._table_name) and (table_name != self._table_name):
             # use this table
@@ -804,7 +844,7 @@ class ExtractFromPostgres(Extract):
         # establish connection
         await self.get_connection()
 
-        await self._fetch_chunks_of_data_from_db(table_name)
+        await self._fetch_chunks_of_data_from_db(table_name, *args, **kwargs)
 
     async def _table_names_list_to_generator_convertor(self, table_names: List[str]):
         for table in table_names:
@@ -829,7 +869,7 @@ class ExtractFromPostgres(Extract):
         if table_names:
             _list_tables = self._table_names_list_to_generator_convertor(table_names)   # creates a generator 
         else:
-            _list_tables = self._get_all_table_names_in_database()
+            _list_tables = self._get_all_table_names_in_database(*args, **kwargs)
 
         # this should ideally have a separate thread for each table
         async for table in _list_tables:    # _list_tables should be a generator
@@ -848,9 +888,8 @@ class ExtractFromPostgres(Extract):
             raise TypeError(f"Arguments provided={args}." 
                             f"`table_names = {args[0]}`"
                             "`table_names` should be list of table names.")
-        await self.arun(table_names=table_names)
+        await self.arun(table_names=table_names, *args, **kwargs)
         return os.path.join(self._table_dir, table_names[0])    # TODO: Generalize this for more tables 
-
 
 class ExtractFromFile(Extract):
     """
@@ -979,8 +1018,6 @@ class ExtractFromFile(Extract):
             f"(rows={df.height}, cols={len(df.columns)})"
         )
         return df
-
-
 
 class IncrementalExtractFromPostgres(ExtractFromPostgres):
     """
@@ -1192,3 +1229,70 @@ class IncrementalExtractFromPostgres(ExtractFromPostgres):
         logger.warning(f"{self.__class__.__name__} does not have synchronous run.")
         return asyncio.run(self.arun(table_names=table_names))
         # raise NotImplementedError(f"{self.__class__.__name__} does not have synchronous run.")
+
+class IncrementalExtractFromPostgresRowWise(ExtractFromPostgres):
+    """The incremental extraction occurs row wise.
+    So, this expects a row number to take the data from 
+    and an ending row till which the data is to be taken."""
+    def __init__(
+            self, 
+            row_start: int = 0,
+            row_end: int = -1,
+            n_rows: Optional[int] = -1,
+            data_metadata: Union[str, Path] = ".data.metadata",
+            **kwargs
+    ):
+        """
+        _summary_
+
+        Parameters
+        ----------
+        row_start : int, optional
+            Extraction should begin at , by default 0
+        row_end : int, optional
+            Data to be extracted upto this row number, by default -1, or gets all the rows
+        n_rows : Optional[int], optional
+            Number of rows to extract. Only to be provided when `end_row` is not provided, by default -1
+        data_metadata : Union[str, Path], optional
+            _description_, by default ".data.metadata"
+        """
+        # initialize postgres funcitonality
+        super().__init__(**kwargs)
+
+        # inititalize starting row
+        self._starting_row = row_start
+
+        # load the last extracted row
+        # expects `.data.metadata` file
+        self._metadata_path = Path(data_metadata)
+
+        self.metadata_handler = MetadataHandler(data_metadata)
+        
+        try:
+            self._last_extracted = self.metadata_handler._metadata[-1]
+        except IndexError:
+            self._last_extracted = None
+
+        if self._last_extracted:
+            if not self._last_extracted.get("data_type") == MetadataTypes.TABULAR:
+                raise Exception("Last saved metadata is not of a table")
+
+            # if last from the prev stored metadata is extracted
+            # update the starting row as the ending row + 1 of the last extracted data 
+            self._starting_row = self._last_extracted["content"]["row_end"] + 1 # last row of the last data
+        
+        # initializing ending row according to the starting row
+        self._ending_row = max(self._starting_row + n_rows, row_end)
+        if self._ending_row == -1:
+            logger.warning("All rows of the data will be extracted")
+    
+    async def _fetch_chunks_of_data_from_db(self, table_name):
+        return await super()._fetch_chunks_of_data_from_db(table_name, self._starting_row, self._ending_row) 
+    
+    async def arun(self, *args, **kwargs):
+        kwargs.update({"start_row": self._starting_row})
+        kwargs.update({"end_row": self._ending_row})
+        return await super().arun(*args, **kwargs)
+    
+    async def run(self, *args, **kwargs):
+        return await super().run(*args, **kwargs)
