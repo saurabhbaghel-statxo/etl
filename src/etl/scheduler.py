@@ -354,7 +354,7 @@ class Scheduler:
     Scheduler for running functions repeatedly at a specified interval.
     Supports both synchronous and asynchronous functions.
     """
-    def __init__(self, repeat_after_seconds: int = 0):
+    def __init__(self, repeat_after_seconds: int = 0, callback: Optional[Callable] = None):
         """
         Parameters
         ----------
@@ -376,33 +376,65 @@ class Scheduler:
         ```
         """
         self._repeat_after_seconds = repeat_after_seconds
+        self._callback = callback
+        self._running_tasks = list()    # to store the tasks running
+
+    def add_task(self, task: asyncio.Task):
+        self._running_tasks.append(task)
+
+    def remove_task(self, task: asyncio.Task):
+        self._running_tasks.remove(task)
+        # NOTE: this removes the first instance, whichever it is
+
+    async def stop_all(self):
+        for t in self._running_tasks:
+            t.cancel()  # handle this when t is just a callable
+        self._running_tasks.clear()
+
         
     # --- CORE RUNNERS ---
-    def _run_forever(self, executable, schedule_name: str, interval_seconds: float, x: Optional[Any], *args, **kwargs):
+    def _run_forever(self, executable, x: Optional[Any], schedule_name: str, interval_seconds: float, *args, **kwargs):
         """Generic infinite loop for job execution (sync version, yields results)."""
         logger.info("Starting job `%s` (%s)", executable.__name__, schedule_name)
         while True:
             start = time.time()
-            result = executable.run(*args, **kwargs)
+            result = executable.run(x, *args, **kwargs)
             elapsed = time.time() - start
             yield result
             # Sleep for remaining time after execution
             sleep_time = max(0, interval_seconds - elapsed)
             time.sleep(sleep_time)
 
-    async def _arun_forever(self, func, schedule_name: str, interval_seconds: float, *args, **kwargs):
+    async def _arun_forever(self, executable, x: Optional[Any], schedule_name: str, interval_seconds: float, *args, **kwargs):
         """Generic infinite loop for job execution (async version, yields results)."""
-        logger.info("Starting job `%s` (%s)", func.__name__, schedule_name)
-        while True:
-            start = time.time()
-            result = await func(*args, **kwargs)
-            elapsed = time.time() - start
-            yield result
-            # Sleep for remaining time after execution
-            sleep_time = max(0, interval_seconds - elapsed)
-            await asyncio.sleep(sleep_time)
+        from etl.executable import _ExecutableMeta
 
-    def run(self, func, *args, **kwargs):
+        logger.info("Starting job `%s` (%s)", executable.__name__, schedule_name)
+
+        if hasattr(executable, 'arun') and callable(getattr(executable, 'arun')):   # ducktype checking
+        
+            while True:
+                start = time.time()
+                result = await executable.arun(x, *args, **kwargs)
+                elapsed = time.time() - start
+                yield result
+                # Sleep for remaining time after execution
+                sleep_time = max(0, interval_seconds - elapsed)
+                logger.debug("Sleeping for %d s", sleep_time)
+                await asyncio.sleep(sleep_time)
+
+        elif callable(executable):
+            logger.debug("Executable %s is a function", executable.__name__)
+            while True:
+                start = time.time()
+                result = await executable(x, *args, **kwargs)
+                elapsed = time.time() - start
+                yield result
+                # Sleep for remaining time after execution
+                sleep_time = max(0, interval_seconds - elapsed)
+                await asyncio.sleep(sleep_time)
+
+    def run(self, executable, x, *args, **kwargs):
         """
         Run a synchronous function repeatedly.
         
@@ -416,15 +448,16 @@ class Scheduler:
                 print(result)
         ```
         """
-        schedule_name = f"Scheduler_{self._time_delta_in_seconds}s_{generate_random_id()}"
+        schedule_name = f"Scheduler_{self._repeat_after_seconds}s_{generate_random_id()}"
         return self._run_forever(
-            func, 
+            executable, 
+            x, 
             schedule_name=schedule_name,
-            interval_seconds=self._time_delta_in_seconds,
+            interval_seconds=self._repeat_after_seconds,
             *args, **kwargs
         )
 
-    async def arun(self, func, *args, **kwargs):
+    async def arun(self, executable, x, *args, **kwargs):
         """
         Run an asynchronous function repeatedly.
         
@@ -443,19 +476,21 @@ class Scheduler:
         RuntimeError
             If func is not an async function (coroutine function)
         """
-        if not asyncio.iscoroutinefunction(func):
-            logger.error("Function is not a coroutine function: %s", func.__name__)
-            raise RuntimeError(f"{func.__name__} is not an async function")
-        
-        schedule_name = f"Scheduler_{self._time_delta_in_seconds}s_{generate_random_id()}"
-        async for result in self._arun_forever(
-            func, 
+
+        schedule_name = f"Scheduler_{self._repeat_after_seconds}s_{generate_random_id()}"
+        async for res in self._arun_forever(
+            executable, 
+            x,
             schedule_name=schedule_name,
-            interval_seconds=self._time_delta_in_seconds,
+            interval_seconds=self._repeat_after_seconds,
             *args, **kwargs
         ):
-            yield result
-
+            if self._callback:
+                if asyncio.iscoroutinefunction(self._callback):
+                    await self._callback(res)
+                else:
+                    self._callback(res)
+            yield res
 
     def schedule(self, executable: Callable[..., Any]):   
         def _wrapper(*args, **kwargs):

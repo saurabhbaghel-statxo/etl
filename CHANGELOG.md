@@ -56,4 +56,19 @@
 - A metadata handler `MetadataHandler`, this will read already saved metadata and write 
 - An enum of data types `MetadataTypes`
 - A tabular data type content `TabularData` for metadata 
-- 
+
+## [0.1.2] - 18-11-2025
+
+### Added
+- `table_name` in data metadata
+
+## [0.1.3] - 20-11-2025
+
+### Changed
+- Removed the first step invokation out of scheduler to solve (ETL-9)
+- Getting the last metadata for current table only after checking the table name
+- Adding datetime to final table name after loading for `.csv`s. Eg. - `revenues_new_19-11-2025_15-47.csv`
+ 
+
+### Added
+- Can now schedule the whole etl pipeline to be repeated after fixed time (ETL-8)

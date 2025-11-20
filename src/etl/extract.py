@@ -621,12 +621,12 @@ class ExtractFromPostgres(Extract):
                 self._last_extracted_data = None
 
             if self._last_extracted_data:
-                if not self._last_extracted.get("data_type") == MetadataTypes.TABULAR:
+                if not self._last_extracted_data.get("data_type") == MetadataTypes.TABULAR:
                     raise Exception("Last saved metadata is not of a table")
 
                 # if last from the prev stored metadata is extracted
                 # update the starting row as the ending row + 1 of the last extracted data 
-                self._starting_row = self._last_extracted["content"]["row_end"] + 1 # last row of the last data
+                self._starting_row = self._last_extracted_data["content"]["row_end"] + 1 # last row of the last data
       
 
 
@@ -761,7 +761,40 @@ class ExtractFromPostgres(Extract):
         
         # return conn.cursor(cursor_factory=cursor_factory)
 
+    def _get_latest_file_idx_from_dir(self, dir: str | Path):
+        """Gives the maximum file index/serial among all the files present. 
         
+        
+        Example
+        ======= 
+        If the directory has files -
+        data/
+            - revenues_new_chunk_0.parquet
+            - revenues_new_chunk_1.parquet
+            - revenues_new_chunk_2.parquet
+            ...
+            - revenues_new_chunk_{n}.parquet
+
+        the new file to be stored in this data/ will be named - revenues_new_chunk_{n+1}.parquet.
+
+        This method gives this `n+1` index.
+        
+        """
+        import re
+
+        files = os.listdir(dir)
+        
+        if not files:
+            return 0
+        
+        idxs = [int(re.findall("_(\d+)", name)[-1]) for name in files]
+
+        if not idxs:
+            return 0
+        
+        return max(idxs) + 1
+
+
     async def _fetch_chunks_of_data_from_db(
         self, 
         table_name: str, 
@@ -788,7 +821,7 @@ class ExtractFromPostgres(Extract):
             offset = (start_row - 1) if start_row else 0
             
             if start_row and end_row:
-                limit = end_row - start_row + 1
+                limit = end_row - start_row
             elif end_row:
                 limit = end_row
             else:
@@ -813,7 +846,7 @@ class ExtractFromPostgres(Extract):
         _buffer = []    # will hold all the chunks until they are enough
 
         if self._conn:
-            chunk_idx = 0
+            chunk_idx = self._get_latest_file_idx_from_dir(_table_path)
             _row_count = 0
 
             # for metadata
@@ -853,8 +886,9 @@ class ExtractFromPostgres(Extract):
                     "date_ended": date_ended,
                     "data_type": MetadataTypes.TABULAR.value,
                     "src_data": self._host,
-                    "des_data": _table_path,
+                    "dest_data": _table_path,
                     "content": {
+                        "table_name": self._table_name,
                         "row_start": start_row,
                         "row_end": end_row
                     }
@@ -1315,17 +1349,28 @@ class IncrementalExtractFromPostgresRowWise(ExtractFromPostgres):
         super().__init__(**kwargs)
         
         try:
-            self._last_extracted = self.metadata_handler._metadata[-1]
-        except IndexError:
-            self._last_extracted = None
+            # check for the given table last recorded data
+            for meta in self._metadata_handler._metadata:
+                if meta.get("data_type") == MetadataTypes.TABULAR.value:
+                    if meta["content"]["table_name"] == self._table_name:
+                        self._last_extracted_data = meta
+                        logger.info("Last extracted metadata for the table %s = %s", self._table_name, self._last_extracted_data)
+                        # this will automatically get the latest entry for that table
 
-        if self._last_extracted:
-            if not self._last_extracted.get("data_type") == MetadataTypes.TABULAR:
-                raise Exception("Last saved metadata is not of a table")
+        except Exception as exc:
+            logger.exception(
+                "Exception while getting the latest extracted metadata for the table, %s",
+                exc
+            )
+            self._last_extracted_data = None
+
+        if self._last_extracted_data:
+        #     if not self._last_extracted_data.get("data_type") == MetadataTypes.TABULAR:
+        #         raise Exception("Last saved metadata is not of a table")
 
             # if last from the prev stored metadata is extracted
             # update the starting row as the ending row + 1 of the last extracted data 
-            self._starting_row = self._last_extracted["content"]["row_end"] + 1 # last row of the last data
+            self._starting_row = self._last_extracted_data["content"]["row_end"] + 1 # last row of the last data
         
         # initializing ending row according to the starting row
         self._ending_row = max(self._starting_row + n_rows, row_end)

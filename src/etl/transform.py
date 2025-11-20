@@ -1995,7 +1995,7 @@ class FlattenDictColumn(Transform):
                 pl.col(self._column).str.json_decode(dtype=_dtype)
             )
 
-        logger.debug("Before Flattening table looks like= ", df.head(2))
+        logger.debug("Before Flattening table looks like= %s", df.head(2))
 
         # update the schema again 
         # with the updated columns
@@ -2261,6 +2261,7 @@ class JoinDataFrames(Transform):
         # for now just two dataframes
         a, b = xs
         return a.join(b, on=self._on, how=self._how)
+
 
 class MapElements(Transform):
     """

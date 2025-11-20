@@ -21,6 +21,9 @@ class MetadataTypes(StrEnum):
 
 
 class TabularData(BaseModel):
+    table_name: Optional[str] = ""
+    '''Name of the table'''
+
     row_start: Optional[int] = 0
     '''Row number data starting'''
 
@@ -90,6 +93,7 @@ class MetadataHandler:
         finally:
             return prev_metadata
 
+    # TODO: make it a decorator
     def write(self, **kwargs):
         """Writes the metadata to the file"""
         

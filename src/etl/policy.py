@@ -6,6 +6,10 @@
 from typing import Literal, List, Union
 from enum import Enum
 
+
+RepeatPolicy = Literal["on_src_update", "after_fixed_time"] # TODO: add more
+
+
 class PolicyOptions(Enum):
     compute_optimized=1
     '''Arranging the tasks to optimize the compute'''
@@ -18,7 +22,12 @@ class PolicyOptions(Enum):
 
 
 class Policy:
-    """Policy to be followed while execution"""
+    """Policy to be followed while execution of runnables. 
+    What order the runnables are to be executed.
+    
+    This guides the concurrent, multithreading, 
+    multiprocessing policies for optimum execution.
+    """
     def __init__(self, policy_option: PolicyOptions=PolicyOptions.default):
         """
         _summary_

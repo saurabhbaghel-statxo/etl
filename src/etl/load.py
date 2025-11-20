@@ -447,6 +447,10 @@ class LoadToExcel(Load):
         # ensure directory exists
         os.makedirs(os.path.dirname(self._output_path), exist_ok=True)
 
+    def _get_dt_for_name(self) -> str:
+        from datetime import datetime
+        return datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+
     def _get_full_output_path(self) -> str:
         """Constructs the final file path with extension."""
         if not self._output_path.endswith(self._extension):
@@ -455,8 +459,9 @@ class LoadToExcel(Load):
             full_path = self._output_path
 
         if os.path.exists(full_path) and not self._overwrite:
-            raise FileExistsError(f"File already exists: {full_path}")
-
+            logger.info(f"File already exists: {full_path}")
+            full_path = f"{self._output_path}_{self._get_dt_for_name()}{self._extension}"
+            
         return full_path
 
     def run(

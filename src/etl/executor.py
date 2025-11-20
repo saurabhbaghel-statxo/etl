@@ -38,7 +38,7 @@ class Executor:
         if runnable.status in ["queued", "inactive"]:
             runnable.status = "in_progress"
         try:
-            if asyncio.coroutines.iscoroutinefunction(runnable.executable.run): 
+            if asyncio.iscoroutinefunction(runnable.executable.run): 
                 # NOTE: Have temporarily made this runnable.run -> runnable.executable.run
                 # TODO: Check the difference
                 y = await self._call_arun_executable(
@@ -70,12 +70,19 @@ class Executor:
 
     async def execute(self, runnables: List, x: Optional[List], *args, **kwargs) -> Generator:
         from .policy import PolicyOptions
+        from copy import deepcopy
         
+        # making a copy of the runnables so
+        # that when the popping happens for the current 
+        # chain of executables it doesnt 
+        # disturb the fresh chain of executables executing concurrently
+        runnables_copy =  deepcopy(runnables)
+
         logger.info("Policy=%s", self._policy)
         if self._policy == PolicyOptions.default:
             # execute the runnables one by one
             # also, the take the input one by one
-            return await self._execute_runnables_single_chain(runnables, x, *args, **kwargs)
+            return await self._execute_runnables_single_chain(runnables_copy, x, *args, **kwargs)
         
         if self._policy == PolicyOptions.compute_optimized:
             logger.error("Compute Optimized policy not implemented yet.")

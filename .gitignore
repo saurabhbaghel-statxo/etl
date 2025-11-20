@@ -75,6 +75,8 @@ cache/
 __temp__/
 data/
 extras/
+.data.metadata
+.demo_state.txt
 
 # --------------------------
 # Testing / Typing
@@ -83,4 +85,3 @@ extras/
 .test
 test/
 tests/output/
-

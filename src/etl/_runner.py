@@ -13,6 +13,7 @@
 from dataclasses import dataclass, field
 from typing import  Protocol, List, Optional
 import logging
+import asyncio
 
 from ._runnable import Runnable
 from .policy import Policy, PolicyOptions 
@@ -101,7 +102,8 @@ class Runner(metaclass=_ExecutableMeta):
             self,
             runnables: List[Runnable] | List["Runner"],
             policy: PolicyOptions=PolicyOptions.default,
-            executor: Optional[Executor]=None
+            executor: Optional[Executor]=None,
+            scheduler: Optional[Scheduler]=None
     ):
         
         self.runnables = runnables
@@ -128,7 +130,50 @@ class Runner(metaclass=_ExecutableMeta):
         across multiple runs or to customize execution behavior.
         """
 
-    async def run(self, x, *args, **kwargs):
+        self.scheduler = scheduler
+        """
+        Scheduler to run the runner at fixed schedule
+        """
+
+    async def _async_run_core(self, x, *args, **kwargs):
+       
+        # initialise policy
+        # Using the default policy for now
+        _policy = Policy(policy_option=self.policy)
+
+        # initialize executor
+        if not self.executor:
+            self.executor = Executor(_policy)
+        
+        # execute the runnables
+        y = await self.executor.execute(self.runnables, x, *args, **kwargs)
+
+        # successfuly completed runnables
+        _successful_runnables = [
+            _run 
+            for _run, status 
+            in self.executor.runnables_statuses.items() 
+            if status=="completed"
+        ]
+
+        # unsuccessful runnables
+        _unsuccesful_or_incomplete_runnables = [
+            _run 
+            for _run in self.executor.runnables_statuses 
+            if _run not in _successful_runnables
+        ]
+        
+        logger.info(
+            "Successful Tasks=%s, " \
+            "Failed/Incomplete Tasks=%s", 
+            _successful_runnables, 
+            _unsuccesful_or_incomplete_runnables
+        )
+
+        return y
+    
+
+    def _sync_run_core(self, x, *args, **kwargs):
         """
         Execute all runnables in sequence according to the execution policy.
         
@@ -183,7 +228,7 @@ class Runner(metaclass=_ExecutableMeta):
             self.executor = Executor(_policy)
         
         # execute the runnables
-        y = await self.executor.execute(self.runnables, x, *args, **kwargs)
+        y = self.executor.execute(self.runnables, x, *args, **kwargs)
 
         # successfuly completed runnables
         _successful_runnables = [
@@ -208,3 +253,45 @@ class Runner(metaclass=_ExecutableMeta):
         )
 
         return y
+    
+
+    async def arun(self, x, *args, **kwargs):
+
+
+        if self.scheduler:
+            async def _scheduled_loop():
+                try:        
+                    async for res in self.scheduler.arun(self._async_run_core, x, *args, **kwargs):
+                        print("\n\n")
+                        logger.info("Scheduled run completed with result: %s", res)
+                except asyncio.CancelledError as exc:
+                    logger.exception("Error running asynchronously = %s", exc)
+                    raise
+
+            # start the scheduled task
+            await asyncio.create_task(_scheduled_loop(), name="scheduled_task")
+            # _task = asyncio.create_task(_scheduled_loop(), name="scheduled_task")
+            # self.scheduler.add_task(_task)
+            # self._scheduler_task = _task
+
+            logger.info(
+                "Schedulder started in the background (runs every %.1f seconds)",
+                self.scheduler._repeat_after_seconds
+            )
+
+            # run the code once and give the result
+            # result = await self._async_run_core(x, *args, **kwargs)
+            # logger.info("Initial run completed. Result = %s", str(result))
+            # return result
+        else:
+            res = await self._async_run_core(x, *args, **kwargs)
+            logger.info("Result = %s", res)
+            return res
+    
+    def run(self, x, *args, **kwargs):
+        if self.scheduler:
+            res = self.scheduler.run(self._sync_run_core, x, *args, **kwargs)
+        else:
+            res = self._sync_run_core(x, *args, **kwargs)
+
+        return res
