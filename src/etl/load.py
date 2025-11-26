@@ -540,7 +540,7 @@ class LoadToPostgres(Load):
 
         # getting the list of strings
         col_defs = [
-            f"{name} {dtype}"
+            f'"{name}" {dtype}'
             for name, dtype in _col_defs
         ]
 
