@@ -1,6 +1,6 @@
 [project]
 name = "etl"
-version = "0.1.6"
+version = "0.1.6.1"
 description = "Add your description here"
 readme = "README.md"
 authors = [
