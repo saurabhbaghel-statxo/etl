@@ -555,9 +555,9 @@ class LoadToPostgres(Load):
             conn.rollback()
             logger.exception("Failed to create table: %s", e)
             raise
-        finally:
-            cur.close()
-            conn.close()
+        # finally:
+        #     cur.close()
+        #     conn.close()
             
     async def _aensure_table(self, conn, sample_data: pl.DataFrame):
             # asynchronous
