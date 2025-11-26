@@ -531,8 +531,6 @@ class LoadToPostgres(Load):
 
         if table_exists:
             logger.info("Table '%s' already exists.", self._table)
-            cur.close()
-            conn.close()
             return  
 
         # Infer schema from Polars DataFrame
