@@ -12,12 +12,8 @@ dependencies = [
     "psycopg2",
     "asyncpg",
     "pyarrow",
-    "fastapi>=0.120.0",
-    "uvicorn>=0.38.0",
-    "pandas>=2.3.3",
     "python-dotenv>=1.2.1",
     "pydantic>=2.12.3",
-    "ipykernel",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +24,10 @@ dev = [
     "mypy",
     "black",
     "isort",
+    "fastapi>=0.120.0",
+    "uvicorn>=0.38.0",
+    "pandas>=2.3.3",
+    "ipykernel",
 ]
 
 [project.scripts]
