@@ -536,9 +536,15 @@ class LoadToPostgres(Load):
             return  
 
         # Infer schema from Polars DataFrame
-        col_defs = _get_postgres_compatible_schema(sample_data.schema)
+        _col_defs = _get_postgres_compatible_schema(sample_data.schema) # List[Tuple[str, str]]
 
-        create_table_sql = f"CREATE TABLE {self._table} ({', '.join(col_defs)});"
+        # getting the list of strings
+        col_defs = [
+            f"{name} {dtype}"
+            for name, dtype in _col_defs
+        ]
+
+        create_table_sql = f'CREATE TABLE "{self._table}" (\n  {",\n  ".join(col_defs)}\n);'
         logger.info("Creating table '%s' with schema: %s", self._table, create_table_sql)
 
         try:
