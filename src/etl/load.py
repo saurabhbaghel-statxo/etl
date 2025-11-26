@@ -174,7 +174,7 @@ class _LoadParquetFromBuffer:
     _is_chunks_of_parquet_files = False
     _is_single_parquet_file = False
 
-    def __init__(self, parquet_in_buffer):
+    def __init__(self, parquet_in_buffer: pl.DataFrame):
         """
         _summary_
 
@@ -184,7 +184,7 @@ class _LoadParquetFromBuffer:
             Could be a path to a single parquet file. 
             Or a directory containing many parquet files
         """
-        self._parquet_in_buffer = parquet_in_buffer
+        self._parquet_in_buffer = parquet_in_buffer # could be pl.DataFrame
 
     async def aload_data(self):
         """Is a generator. Loads data into memory.
@@ -206,7 +206,7 @@ class _LoadParquetFromBuffer:
         """Is a generator. Loads data into memory.
         Data chunk will be used by downstream tasks like loading the data into postgres db."""
         # TODO: loading all at once, highly undesirable, will change in coming iterations
-        yield self._parquet_in_buffer   
+        yield ChunkData(self._parquet_in_buffer )  
 
 
 
@@ -422,7 +422,7 @@ class LoadToExcel(Load):
         self,
         output_path: str,
         save_type: Literal["parquet", "excel", "csv"] = "parquet",
-        overwrite: bool = True,
+        overwrite: bool = False,
     ):
         """
         Args:

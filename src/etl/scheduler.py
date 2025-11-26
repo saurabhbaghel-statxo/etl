@@ -392,18 +392,63 @@ class Scheduler:
         self._running_tasks.clear()
 
         
+    def _inf_loop_executable_(executable, x, interval_seconds, _async: bool, *args, **kwargs):
+        if not _async:
+            while True:
+                print(f"\n======Run : {_run_num_}======")
+                start = time.time()
+                result = executable.run(x, *args, **kwargs)
+                elapsed = time.time() - start
+                yield result
+                # Sleep for remaining time after execution
+                sleep_time = max(0, interval_seconds - elapsed)
+                current_dt = datetime.now()
+                next_time = (current_dt + timedelta(seconds=sleep_time)).strftime("%d-%m-%Y, %H:%M:%S")
+                print(f"Next run scheduled at: {next_time}")
+                time.sleep(sleep_time)
+                _run_num_ += 1
+
+
     # --- CORE RUNNERS ---
     def _run_forever(self, executable, x: Optional[Any], schedule_name: str, interval_seconds: float, *args, **kwargs):
         """Generic infinite loop for job execution (sync version, yields results)."""
         logger.info("Starting job `%s` (%s)", executable.__name__, schedule_name)
-        while True:
-            start = time.time()
-            result = executable.run(x, *args, **kwargs)
-            elapsed = time.time() - start
-            yield result
-            # Sleep for remaining time after execution
-            sleep_time = max(0, interval_seconds - elapsed)
-            time.sleep(sleep_time)
+        
+        _run_num_ = 1
+
+        if hasattr(executable, "run") and callable(getattr(executable, "run")):
+            # if the executable is an actual Executable subclass
+            
+            while True:
+                print(f"\n======Run : {_run_num_}======")
+                start = time.time()
+                result = executable.run(x, *args, **kwargs)
+                elapsed = time.time() - start
+                yield result
+                # Sleep for remaining time after execution
+                sleep_time = max(0, interval_seconds - elapsed)
+                current_dt = datetime.now()
+                next_time = (current_dt + timedelta(seconds=sleep_time)).strftime("%d-%m-%Y, %H:%M:%S")
+                print(f"Next run scheduled at: {next_time}")
+                time.sleep(sleep_time)
+                _run_num_ += 1
+
+        elif callable(executable):
+            logger.debug("Executable %s is a function", executable.__name__)
+            while True:
+                print(f"\n======Run : {_run_num_}======")
+                start = time.time()
+                result = executable(x, *args, **kwargs)
+                elapsed = time.time() - start
+                yield result
+                # Sleep for remaining time after execution
+                sleep_time = max(0, interval_seconds - elapsed)
+                current_dt = datetime.now()
+                next_time = (current_dt + timedelta(seconds=sleep_time)).strftime("%d-%m-%Y, %H:%M:%S")
+                print(f"Next run scheduled at: {next_time}")
+                time.sleep(sleep_time)
+                _run_num += 1
+
 
     async def _arun_forever(self, executable, x: Optional[Any], schedule_name: str, interval_seconds: float, *args, **kwargs):
         """Generic infinite loop for job execution (async version, yields results)."""
@@ -420,6 +465,9 @@ class Scheduler:
                 yield result
                 # Sleep for remaining time after execution
                 sleep_time = max(0, interval_seconds - elapsed)
+                current_dt = datetime.now()
+                next_time = (current_dt + timedelta(seconds=sleep_time)).strftime("%d-%m-%Y, %H:%M:%S")
+                print(f"Next run scheduled at: {next_time}")
                 logger.debug("Sleeping for %d s", sleep_time)
                 await asyncio.sleep(sleep_time)
 
@@ -432,6 +480,9 @@ class Scheduler:
                 yield result
                 # Sleep for remaining time after execution
                 sleep_time = max(0, interval_seconds - elapsed)
+                current_dt = datetime.now()
+                next_time = (current_dt + timedelta(seconds=sleep_time)).strftime("%d-%m-%Y, %H:%M:%S")
+                print(f"Next run scheduled at: {next_time}")
                 await asyncio.sleep(sleep_time)
 
     def run(self, executable, x, *args, **kwargs):

@@ -1,8 +1,10 @@
 import os
 import gc
 import logging
-from typing import Optional, Any, Dict, List, Union
+from typing import Optional, Any, Dict, List, Union, Generator
+from types import GeneratorType, AsyncGeneratorType
 import asyncio
+# from collections import ge
 from dataclasses import dataclass, field
 
 import polars as pl
@@ -644,7 +646,7 @@ class Etl(_runner.Runner):
         # else:
         return super().run(x, *args, **kwargs)
 
-    async def run(self, x, *args, **kwargs):
+    def run(self, x, *args, **kwargs):
         """
         Execute the ETL pipeline sequentially.
         
@@ -685,5 +687,31 @@ class Etl(_runner.Runner):
                 # x now becomes a table for next transforms
             # x = curr_runnable.run(x, *args, **kwargs)
         # x is tables' names List[str]
-        y = await super().run(x, *args, **kwargs)
-        return y
+        _run_ = super().run(x, *args, **kwargs)   # Generator or Couroutine[Generator]
+        res = []
+        if type(_run_) is GeneratorType:
+            # we cannot await it as such
+            for y in _run_:
+                res.append(y)
+        elif asyncio.iscoroutine(_run_):
+            raise NotImplementedError
+
+        return res
+    
+    async def arun(self, x, *args, **kwargs):
+        _arun_ = super().arun(x, *args, **kwargs)
+        res = []
+
+        if type(_arun_) in (GeneratorType, AsyncGeneratorType):
+            async for y in _arun_:
+                res.append(y)
+
+        elif asyncio.iscoroutine(_arun_):
+            y = await _arun_
+            res.append(y)
+        
+        return res
+
+
+        # y = await 
+        # return y
