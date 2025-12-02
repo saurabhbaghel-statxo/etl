@@ -5,6 +5,7 @@ import inspect
 import asyncio
 import logging
 
+
 logger = logging.getLogger(__name__)
 
 class Executor:
@@ -60,29 +61,56 @@ class Executor:
     
 
 
-    async def _execute_runnables_single_chain(self, runnables: List, x, *args, **kwargs):
-        while runnables:
+    # async def _execute_runnables_single_chain(self, runnables: List, x, *args, **kwargs):
+    async def _execute_runnables_single_chain(self, root_runnable, x, *args, **kwargs):
+        # root_runnable is RunnableNode
+        runnable = root_runnable
+        while runnable:
             # TODO: check runnable and allocate resource 
-            runnable = runnables.pop(0) # get the first one
-            x = await self._execute_single_runnable(runnable, x, *args, **kwargs)
+            # runnable = runnables.pop(0) # get the first one
+            x = await self._execute_single_runnable(runnable._runnable, x, *args, **kwargs)
+            runnable = runnable.next
         return x       
 
+    def _make_runnables_queue(self, runnables: List): # RunnableNode
+        from ._runnable import RunnableNode
+        
+        # first node
 
+        root_node = RunnableNode(runnables[0])
+        prev_node = root_node
+        for _runnable_ in runnables[1:]:
+            # assuming these are in a definite order
+            curr_node = RunnableNode(_runnable_)            
+            curr_node.prev = prev_node
+            prev_node.next = curr_node
+            prev_node = curr_node
+
+        return root_node
+
+    # async def execute(self, runnables: List, x: Optional[List], *args, **kwargs) -> Generator:
     async def execute(self, runnables: List, x: Optional[List], *args, **kwargs) -> Generator:
         from .policy import PolicyOptions
+        from ._runnable import RunnableNode
         from copy import deepcopy
+        
+        # runnable is RunnableNode
         
         # making a copy of the runnables so
         # that when the popping happens for the current 
         # chain of executables it doesnt 
         # disturb the fresh chain of executables executing concurrently
-        runnables_copy =  deepcopy(runnables)
+        root_runnables_copy =  [RunnableNode(_runnable_) for _runnable_ in runnables]
 
         logger.info("Policy=%s", self._policy)
         if self._policy == PolicyOptions.default:
             # execute the runnables one by one
             # also, the take the input one by one
-            return await self._execute_runnables_single_chain(runnables_copy, x, *args, **kwargs)
+
+            # make a linked-list of the runnables
+            root_runnable = self._make_runnables_queue(root_runnables_copy)
+
+            return await self._execute_runnables_single_chain(root_runnable, x, *args, **kwargs)
         
         if self._policy == PolicyOptions.compute_optimized:
             logger.error("Compute Optimized policy not implemented yet.")
@@ -92,7 +120,18 @@ class Executor:
         if self._policy == PolicyOptions.storage_optimized:
             logger.error("Storage Optimized policy not implemented yet.")
             raise NotImplementedError
+        
+        if self._policy == PolicyOptions.parallel:
+            # run the root_nodes parallely
+            tasks = []
+            for __runnable__ in root_runnables_copy:
+                task = asyncio.create_task(
+                        self._execute_runnables_single_chain(
+                            __runnable__, x, *args, **kwargs
+                            )
+                        )
 
+            await asyncio.gather(*tasks)
         # # update the statuses of the runnables
         # self.runnables_statuses = {_runnable: _runnable.status for _runnable in runnables}
         

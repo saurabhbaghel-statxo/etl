@@ -1841,6 +1841,7 @@ class Transform(metaclass=executable._ExecutableMeta):
         else:
             raise TypeError("Transform input should be either table path or table itself")
     
+
 class RenameColumns(Transform):
     """
     Renames the columns with the given names.

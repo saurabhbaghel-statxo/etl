@@ -20,8 +20,11 @@ class PolicyOptions(Enum):
     default=3
     '''Default policy, which assumes the sequential policy provided by the user'''
 
+    parallel=4
+    '''Parallely run the root nodes.'''
 
 class Policy:
+    
     """Policy to be followed while execution of runnables. 
     What order the runnables are to be executed.
     
@@ -39,13 +42,16 @@ class Policy:
         """
         self._policy_option = policy_option
 
-    def rearrange_runnables(self, runnables: List, *args, **kwargs) -> List:
+    def rearrange_runnables(self, root_runnables: List, *args, **kwargs) -> List:
         """Rearranges the runnables according to the policy"""
 
         if self._policy_option == PolicyOptions.default:
             
             # take the list of the runnables as is
-            return runnables
+            return root_runnables
+        if self._policy_option == PolicyOptions.parallel:
+            # run the root nodes parallely
+            return root_runnables
         
     def __repr__(self) -> str:
         return f"{self._policy_option}"

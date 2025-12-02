@@ -1,7 +1,7 @@
 # is the thing which is actually run
 # can convert any thing to be run by the runner
 
-from typing import Any, Optional, Literal
+from typing import Any, Optional, Literal, Union
 import logging
 from dataclasses import dataclass, field
 
@@ -336,3 +336,18 @@ class Runnable(metaclass=_ExecutableMeta):
     
     def __repr__(self):
         return f"Runnable@{self.executable}"
+    
+
+class RunnableNode:
+    def __init__(self, runnable: Union[Runnable, "RunnableNode"], next: "RunnableNode"=None, prev: "RunnableNode"=None):
+        if isinstance(runnable, RunnableNode):
+            # Copy fields from existing node into this new self
+            self._runnable = runnable._runnable
+            self.next = runnable.next
+            self.prev = runnable.prev
+        else:
+            self._runnable = runnable
+            self.next = next
+            self.prev = prev
+
+

@@ -14,8 +14,9 @@ from dataclasses import dataclass, field
 from typing import  Protocol, List, Optional
 import logging
 import asyncio
+from collections import deque
 
-from ._runnable import Runnable
+from ._runnable import Runnable, RunnableNode
 from .policy import Policy, PolicyOptions 
 from .executor import Executor 
 from .scheduler import Scheduler
@@ -269,7 +270,7 @@ class Runner(metaclass=_ExecutableMeta):
                     raise
 
             # start the scheduled task
-            await asyncio.create_task(_scheduled_loop(), name="scheduled_task")
+            await _scheduled_loop()
             # _task = asyncio.create_task(_scheduled_loop(), name="scheduled_task")
             # self.scheduler.add_task(_task)
             # self._scheduler_task = _task

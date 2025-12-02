@@ -573,9 +573,408 @@ class Extract(metaclass=_ExecutableMeta):
 
 
 
+# class ExtractFromPostgres(Extract):
+#     """This class should be initialized only once.
+#     This will keep a track of the tables that have been successfuly extracted."""
+#     def  __init__(
+#             self,
+#             host: str,
+#             user: str,
+#             password: str,
+#             database: str,
+#             table_name: str | None = None,
+#             chunk_size: int | None = None,
+#             schema_name: str | None = None,
+#             table_dir: str | None = None,
+#             port: int |  None = 5432,
+#             metadata_handler: MetadataHandler | None = None
+#     ):
+#         self._host = host
+#         self._user = user
+#         self.__password = password
+#         self._database = database
+#         self._table_name = table_name
+#         self._port = port
+#         self._schema_name = schema_name
+#         self._table_dir = table_dir
+#         self._metadata_handler = metadata_handler
+
+#         # ensuring we have a chunk size
+#         try:
+#             self._chunk_size = (
+#                 self._calculate_optimum_chunk_size()
+#                 if not chunk_size 
+#                 else chunk_size
+#             )
+#         except NotImplementedError:
+#             logger.warning(f"No chunk size provided. Using chunk size=50000")
+#             self._chunk_size = 50_000
+
+#         self.tables = []    # holds names of the tables which have been successfuly extracted
+
+#         # metadata
+#         if self._metadata_handler:
+#             try:
+#                 self._last_extracted_data = self._metadata_handler._metadata[-1]
+#             except IndexError:
+#                 # no data present
+#                 self._last_extracted_data = None
+
+#             if self._last_extracted_data:
+#                 if not self._last_extracted_data.get("data_type") == MetadataTypes.TABULAR:
+#                     raise Exception("Last saved metadata is not of a table")
+
+#                 # if last from the prev stored metadata is extracted
+#                 # update the starting row as the ending row + 1 of the last extracted data 
+#                 self._starting_row = self._last_extracted_data["content"]["row_end"] + 1 # last row of the last data
+      
+
+
+#     @property
+#     def host(self):
+#         return self._host
+    
+#     @property
+#     def database(self):
+#         return self._database
+    
+#     @property
+#     def schema_name(self):
+#         return self._schema_name
+    
+#     @property
+#     def password(self):
+#         return "***" + self.__password[-3:] if len(self.__password) > 4 else "***" + self.__password[-1]
+    
+#     @property
+#     def table_dir(self):
+#         return self._table_dir
+    
+#     @table_dir.setter
+#     def table_dir(self, value: str):
+#         if not os.path.isdir(value):
+#             raise ValueError("Table directory has to be a valid directory")
+#         self._table_dir = value
+
+
+#     @schema_name.setter
+#     def schema_name(self, value: str):
+#         if type(value) is not str:
+#             raise ValueError("Schema name should be a string")
+#         self._schema_name = value
+    
+#     # TODO:
+#     def _calculate_optimum_chunk_size(self) -> int:
+#         """Calculates the most optimum chunk size of data to download."""
+#         raise NotImplementedError()
+
+#     def __repr__(self) -> str:
+#         """Return a nice string"""
+#         return (
+#             f"{self.__class__.__name__} "
+#                 f"(host={self.host}, " 
+#                 f"user={self._user}, " 
+#                 f"database={self.database}, " 
+#                 f"password={self.password}, " 
+#                 f"port={self._port}), "
+#                 f"output_option={self.output_option}"
+#         )
+
+#     async def _run_unit_query(self, cursor, query: str):
+#         """It is generator. Runs a query and generates responses. Row-wise."""
+        
+#         cursor.execute(query)
+#         ans = cursor.fetchall()
+
+#         if type(cursor) is psycopg2.extras.DictCursor:
+#             for row in ans:
+#                 yield dict(row)
+#         elif type(cursor) is psycopg2.extras.NamedTupleCursor:
+#             for row in ans:
+#                 yield row
+
+#     # async def _run_unit_query(self, connection, query: str):
+#     #     """Overloaded for asyncpg"""
+#     #     async for record in connection.cursor(query, prefetch=self._chunk_size):
+#     #         yield record
+
+#     async def _table_shape_(self, table_name: str) -> Tuple[int, int]:
+#         schema_name = self.schema_name or "public"
+#         _query_for_shape = f"""
+#         WITH cols AS (
+#             SELECT COUNT(*) AS column_count
+#             FROM information_schema.columns
+#             WHERE table_schema='{self.schema_name}'
+#                 AND table_name = '{table_name}'
+#         ),
+
+#         rows AS (
+#             SELECT COUNT(*) AS row_count
+#             FROM {table_name}
+#         )
+#         SELECT rows.row_count, rows.column_count
+#         FROM rows, cols;
+#         """
+
+#         async with self._conn.transaction():
+#             async for res in self._conn.cursor(_query_for_shape):
+#                 return res.get("row_count"), res.get("column_count")
+
+#     async def _get_all_table_names_in_database(self):
+#         assert self.schema_name is not None, "Schema Name is not provided."
+
+#         _all_data = f"""
+#         SELECT table_name
+#         FROM information_schema.tables
+#         WHERE table_schema='{self.schema_name}';
+#         """
+#         async with self._conn.transaction():
+#             async for row in self._conn.cursor(_all_data):
+#                 yield dict(row)["table_name"]
+
+#     async def get_connection(self, as_dict: bool=False):
+#         """`NamedTuple` is more memory efficient so use `as_dict=False` which is the default choice,
+#         unless you have a very good reason to have dictionary.
+
+#         The memory consumption is > 2X for `dict` than `NamedTuple`
+#         """
+#         # OLD:
+#         # conn = psycopg2.connect(
+#         #     host=self.host, 
+#         #     database=self.database, 
+#         #     user=self._user, 
+#         #     port=self._port, 
+#         #     password=self.__password, 
+#         # )
+#         logger.debug("Connecting to the database")
+#         self._conn = await asyncpg.connect(
+#             host=self.host, 
+#             database=self.database, 
+#             user=self._user, 
+#             port=self._port, 
+#             password=self.__password,           
+#         )
+
+#         # if as_dict: 
+#         #     cursor_factory = psycopg2.extras.DictCursor
+#         # else: 
+#         #     cursor_factory = psycopg2.extras.NamedTupleCursor
+        
+#         # return conn.cursor(cursor_factory=cursor_factory)
+
+#     def _get_latest_file_idx_from_dir(self, dir: str | Path):
+#         """Gives the maximum file index/serial among all the files present. 
+        
+        
+#         Example
+#         ======= 
+#         If the directory has files -
+#         data/
+#             - revenues_new_chunk_0.parquet
+#             - revenues_new_chunk_1.parquet
+#             - revenues_new_chunk_2.parquet
+#             ...
+#             - revenues_new_chunk_{n}.parquet
+
+#         the new file to be stored in this data/ will be named - revenues_new_chunk_{n+1}.parquet.
+
+#         This method gives this `n+1` index.
+        
+#         """
+#         import re
+
+#         files = os.listdir(dir)
+        
+#         if not files:
+#             return 0
+        
+#         idxs = [int(re.findall("_(\d+)", name)[-1]) for name in files]
+
+#         if not idxs:
+#             return 0
+        
+#         return max(idxs) + 1
+
+
+#     async def _fetch_chunks_of_data_from_db(
+#         self, 
+#         table_name: str, 
+#         start_row: int = None, 
+#         end_row: int = None
+#     ):
+#         """Gives chunks of data from the database.
+#         Each chunk will be saved as a single parquet file.
+        
+#         Args:
+#             table_name: Name of the table to fetch data from
+#             start_row: Optional starting row number (1-indexed, inclusive)
+#             end_row: Optional ending row number (1-indexed, inclusive)
+#         """
+
+#         # Build the base query
+#         if self.schema_name: 
+#             base_query = f"SELECT * FROM {self.schema_name}.{table_name}"
+#         else:
+#             base_query = f"SELECT * FROM {table_name}"
+        
+#         # Add LIMIT and OFFSET if start_row or end_row is provided
+#         if start_row is not None or end_row is not None:
+#             offset = (start_row - 1) if start_row else 0
+            
+#             if start_row and end_row:
+#                 limit = end_row - start_row
+#             elif end_row:
+#                 limit = end_row
+#             else:
+#                 limit = None
+            
+#             if limit is not None:
+#                 query = f"{base_query} LIMIT {limit} OFFSET {offset}"
+#             else:
+#                 query = f"{base_query} OFFSET {offset}"
+            
+#             logger.info(
+#                 "Fetching chunks from table=%s with start_row=%s, end_row=%s (LIMIT=%s, OFFSET=%s)", 
+#                 table_name, start_row, end_row, limit, offset
+#             )
+#         else:
+#             query = base_query
+#             logger.info("Fetching all chunks from table=%s", table_name)
+
+#         _table_path = os.path.join(self.table_dir, table_name)
+#         os.makedirs(_table_path, exist_ok=True)  # ensure the directory for the table exists
+
+#         _buffer = []    # will hold all the chunks until they are enough
+
+#         if self._conn:
+#             chunk_idx = self._get_latest_file_idx_from_dir(_table_path)
+#             _row_count = 0
+
+#             # for metadata
+#             date_started = datetime.now()
+
+#             # using asyncpg for PostgreSQL
+#             async with self._conn.transaction():
+#                 async for row in self._conn.cursor(query, prefetch=self._chunk_size):
+#                     _buffer.append(dict(row))
+                    
+#                     if (_row_count+1) % int(self._chunk_size / 10) == 0:
+#                         logger.debug("Row appended=%s", row)
+
+#                     if len(_buffer) >= self._chunk_size:
+#                         logger.debug("Saving Chunk=%s for Table=%s", chunk_idx, table_name)
+#                         table = pa.Table.from_pylist(_buffer)
+#                         table_path = os.path.join(_table_path, f"{table_name}_chunk_{chunk_idx}.parquet")
+#                         # write the chunk
+#                         pq.write_table(table, table_path)
+#                         chunk_idx += 1
+                        
+#                         _buffer = []    # resetting buffer as empty list
+#                     _row_count += 1
+
+#             if _buffer:
+#                 logger.info("Saving Final Chunk=%s for Table=%s", chunk_idx, table_name)
+#                 table = pa.Table.from_pylist(_buffer)
+#                 file_path = os.path.join(_table_path, f"{table_name}_chunk_{chunk_idx}.parquet")
+#                 pq.write_table(table, file_path)  
+            
+#             # for metadata
+#             date_ended = datetime.now()
+
+#             # write metadata
+#             _m = {   
+#                     "date_started": date_started,
+#                     "date_ended": date_ended,
+#                     "data_type": MetadataTypes.TABULAR.value,
+#                     "src_data": self._host,
+#                     "dest_data": _table_path,
+#                     "content": {
+#                         "table_name": self._table_name,
+#                         "row_start": start_row,
+#                         "row_end": end_row
+#                     }
+#                 }
+#             logger.info("Metadata = %s", str(_m))
+#             self._metadata_handler.write(**_m)
+
+#             logger.info("Metadata written at=%s", self._metadata_handler.file)            
+
+#         else:
+#             raise Exception("No connection!")
+                
+#         # write for psycopg2
+#         # if cursor
+
+#     async def _get_data_one_table(self, table_name: str | None = None, *args, **kwargs):
+
+#         if (table_name and self._table_name) and (table_name != self._table_name):
+#             # use this table
+#             logger.warning(
+#                 "Object initialization table name=%s does not match table name now given=%s. Using the latter.", 
+#                 self._table_name, table_name
+#             )
+#             self._table_name = table_name
+#         if not table_name:
+#             if self._table_name:
+#                 table_name = self._table_name
+#             else:
+#                 raise ValueError("Provide Table Name")
+
+#         # establish connection
+#         await self.get_connection()
+
+#         await self._fetch_chunks_of_data_from_db(table_name, *args, **kwargs)
+
+#     async def _table_names_list_to_generator_convertor(self, table_names: List[str]):
+#         for table in table_names:
+#             yield table
+
+#     async def arun(self, *args, **kwargs):
+#         table_names = args[0]
+#         logger.debug("Table Names in ExtractFromPostgres.arun=%s", table_names)
+#         try:
+#             await self.get_connection()
+#             logger.info("Database connected.")
+#         except Exception as exc:
+#             raise
+#         print(common.Ui.heading_divider)
+#         print("{:^10}".format("Extracting Data from Postgres"), end=" | ")
+#         print("{:>10}".format(self.database))
+#         print(common.Ui.heading_divider)
+        
+#         # making a list of tables to be downloaded
+#         # if table names is not given then
+#         # get all the tables
+#         if table_names:
+#             _list_tables = self._table_names_list_to_generator_convertor(table_names)   # creates a generator 
+#         else:
+#             _list_tables = self._get_all_table_names_in_database(*args, **kwargs)
+
+#         # this should ideally have a separate thread for each table
+#         async for table in _list_tables:    # _list_tables should be a generator
+#             logger.debug("Fetching Table=%s", table)
+#             await self._get_data_one_table(table)
+    
+#         await self._conn.close()
+
+#         return os.path.join(self._table_dir, table_names[0])
+
+#     async def run(self, *args, **kwargs) -> str:
+#         logger.warning("%s only has asynchronous run. " \
+#         "So, running this asynchronously", self.__class__.__name__)
+#         table_names = args[0]
+#         if type(table_names) is not list:
+#             raise TypeError(f"Arguments provided={args}." 
+#                             f"`table_names = {args[0]}`"
+#                             "`table_names` should be list of table names.")
+#         await self.arun(table_names=table_names, *args, **kwargs)
+#         return os.path.join(self._table_dir, table_names[0])    # TODO: Generalize this for more tables 
 class ExtractFromPostgres(Extract):
     """This class should be initialized only once.
-    This will keep a track of the tables that have been successfuly extracted."""
+    This will keep a track of the tables that have been successfuly extracted.
+    
+    Note: All row numbers are 0-indexed (first row is row 0).
+    """
     def  __init__(
             self,
             host: str,
@@ -612,24 +1011,15 @@ class ExtractFromPostgres(Extract):
 
         self.tables = []    # holds names of the tables which have been successfuly extracted
 
-        # metadata
+        # metadata - basic initialization
+        # Subclasses should handle metadata-based resumption themselves
         if self._metadata_handler:
             try:
                 self._last_extracted_data = self._metadata_handler._metadata[-1]
             except IndexError:
                 # no data present
                 self._last_extracted_data = None
-
-            if self._last_extracted_data:
-                if not self._last_extracted_data.get("data_type") == MetadataTypes.TABULAR:
-                    raise Exception("Last saved metadata is not of a table")
-
-                # if last from the prev stored metadata is extracted
-                # update the starting row as the ending row + 1 of the last extracted data 
-                self._starting_row = self._last_extracted_data["content"]["row_end"] + 1 # last row of the last data
       
-
-
     @property
     def host(self):
         return self._host
@@ -655,7 +1045,6 @@ class ExtractFromPostgres(Extract):
         if not os.path.isdir(value):
             raise ValueError("Table directory has to be a valid directory")
         self._table_dir = value
-
 
     @schema_name.setter
     def schema_name(self, value: str):
@@ -693,12 +1082,7 @@ class ExtractFromPostgres(Extract):
             for row in ans:
                 yield row
 
-    # async def _run_unit_query(self, connection, query: str):
-    #     """Overloaded for asyncpg"""
-    #     async for record in connection.cursor(query, prefetch=self._chunk_size):
-    #         yield record
-
-    async def _table_shape_(self, table_name: str):
+    async def _table_shape_(self, table_name: str) -> Tuple[int, int]:
         schema_name = self.schema_name or "public"
         _query_for_shape = f"""
         WITH cols AS (
@@ -708,16 +1092,17 @@ class ExtractFromPostgres(Extract):
                 AND table_name = '{table_name}'
         ),
 
-        row AS (
+        rows AS (
             SELECT COUNT(*) AS row_count
             FROM {table_name}
         )
-        SELECT row_count, column_count
+        SELECT rows.row_count, cols.column_count
         FROM rows, cols;
         """
 
         async with self._conn.transaction():
-            return self._conn.cursor(_query_for_shape)
+            async for res in self._conn.cursor(_query_for_shape):
+                return res.get("row_count"), res.get("column_count")
 
     async def _get_all_table_names_in_database(self):
         assert self.schema_name is not None, "Schema Name is not provided."
@@ -737,14 +1122,6 @@ class ExtractFromPostgres(Extract):
 
         The memory consumption is > 2X for `dict` than `NamedTuple`
         """
-        # OLD:
-        # conn = psycopg2.connect(
-        #     host=self.host, 
-        #     database=self.database, 
-        #     user=self._user, 
-        #     port=self._port, 
-        #     password=self.__password, 
-        # )
         logger.debug("Connecting to the database")
         self._conn = await asyncpg.connect(
             host=self.host, 
@@ -754,16 +1131,8 @@ class ExtractFromPostgres(Extract):
             password=self.__password,           
         )
 
-        # if as_dict: 
-        #     cursor_factory = psycopg2.extras.DictCursor
-        # else: 
-        #     cursor_factory = psycopg2.extras.NamedTupleCursor
-        
-        # return conn.cursor(cursor_factory=cursor_factory)
-
     def _get_latest_file_idx_from_dir(self, dir: str | Path):
         """Gives the maximum file index/serial among all the files present. 
-        
         
         Example
         ======= 
@@ -778,7 +1147,6 @@ class ExtractFromPostgres(Extract):
         the new file to be stored in this data/ will be named - revenues_new_chunk_{n+1}.parquet.
 
         This method gives this `n+1` index.
-        
         """
         import re
 
@@ -794,7 +1162,6 @@ class ExtractFromPostgres(Extract):
         
         return max(idxs) + 1
 
-
     async def _fetch_chunks_of_data_from_db(
         self, 
         table_name: str, 
@@ -806,8 +1173,8 @@ class ExtractFromPostgres(Extract):
         
         Args:
             table_name: Name of the table to fetch data from
-            start_row: Optional starting row number (1-indexed, inclusive)
-            end_row: Optional ending row number (1-indexed, inclusive)
+            start_row: Optional starting row number (0-indexed, inclusive)
+            end_row: Optional ending row number (0-indexed, inclusive)
         """
 
         # Build the base query
@@ -818,13 +1185,16 @@ class ExtractFromPostgres(Extract):
         
         # Add LIMIT and OFFSET if start_row or end_row is provided
         if start_row is not None or end_row is not None:
-            offset = (start_row - 1) if start_row else 0
+            offset = start_row if start_row else 0
             
-            if start_row and end_row:
-                limit = end_row - start_row
-            elif end_row:
-                limit = end_row
+            if start_row is not None and end_row is not None:
+                # Include both start and end rows
+                limit = end_row - start_row + 1
+            elif end_row is not None:
+                # From row 0 to end_row
+                limit = end_row + 1
             else:
+                # From start_row to end of table
                 limit = None
             
             if limit is not None:
@@ -848,6 +1218,10 @@ class ExtractFromPostgres(Extract):
         if self._conn:
             chunk_idx = self._get_latest_file_idx_from_dir(_table_path)
             _row_count = 0
+            
+            # Track actual row numbers for metadata (0-indexed)
+            actual_start_row = start_row if start_row is not None else 0
+            actual_end_row = actual_start_row
 
             # for metadata
             date_started = datetime.now()
@@ -856,9 +1230,11 @@ class ExtractFromPostgres(Extract):
             async with self._conn.transaction():
                 async for row in self._conn.cursor(query, prefetch=self._chunk_size):
                     _buffer.append(dict(row))
+                    actual_end_row = actual_start_row + _row_count
+                    _row_count += 1
                     
-                    if (_row_count+1) % int(self._chunk_size / 10) == 0:
-                        logger.debug("Row appended=%s", row)
+                    if _row_count % int(self._chunk_size / 10) == 0:
+                        logger.debug("Row appended=%s (row number %s)", row, actual_end_row)
 
                     if len(_buffer) >= self._chunk_size:
                         logger.debug("Saving Chunk=%s for Table=%s", chunk_idx, table_name)
@@ -869,7 +1245,6 @@ class ExtractFromPostgres(Extract):
                         chunk_idx += 1
                         
                         _buffer = []    # resetting buffer as empty list
-                    _row_count += 1
 
             if _buffer:
                 logger.info("Saving Final Chunk=%s for Table=%s", chunk_idx, table_name)
@@ -880,7 +1255,7 @@ class ExtractFromPostgres(Extract):
             # for metadata
             date_ended = datetime.now()
 
-            # write metadata
+            # write metadata with actual rows extracted
             _m = {   
                     "date_started": date_started,
                     "date_ended": date_ended,
@@ -888,9 +1263,10 @@ class ExtractFromPostgres(Extract):
                     "src_data": self._host,
                     "dest_data": _table_path,
                     "content": {
-                        "table_name": self._table_name,
-                        "row_start": start_row,
-                        "row_end": end_row
+                        "table_name": table_name,
+                        "row_start": actual_start_row,
+                        "row_end": actual_end_row,
+                        "rows_extracted": _row_count
                     }
                 }
             logger.info("Metadata = %s", str(_m))
@@ -900,9 +1276,6 @@ class ExtractFromPostgres(Extract):
 
         else:
             raise Exception("No connection!")
-                
-        # write for psycopg2
-        # if cursor
 
     async def _get_data_one_table(self, table_name: str | None = None, *args, **kwargs):
 
@@ -969,6 +1342,159 @@ class ExtractFromPostgres(Extract):
         await self.arun(table_names=table_names, *args, **kwargs)
         return os.path.join(self._table_dir, table_names[0])    # TODO: Generalize this for more tables 
 
+
+class IncrementalExtractFromPostgresRowWise(ExtractFromPostgres):
+    """Incremental extraction that occurs row-wise.
+    
+    This class extracts data from a PostgreSQL table starting from a specified row
+    and continuing for a specified number of rows or until an ending row.
+    
+    Note: All row numbers are 0-indexed (first row is row 0).
+    """
+    
+    def __init__(
+            self, 
+            row_start: int = 0,
+            row_end: int = -1,
+            n_rows: Optional[int] = -1,
+            data_metadata: Union[str, Path] = ".data.metadata",
+            **kwargs
+    ):
+        """
+        Initialize incremental extraction from PostgreSQL.
+
+        Parameters
+        ----------
+        row_start : int, optional
+            Row number to start extraction from (0-indexed), by default 0
+        row_end : int, optional
+            Row number to extract up to (inclusive, 0-indexed), by default -1 (all rows)
+        n_rows : Optional[int], optional
+            Number of rows to extract. Only used when `row_end` is not provided, by default -1
+        data_metadata : Union[str, Path], optional
+            Path to metadata file for tracking extraction progress, by default ".data.metadata"
+        **kwargs : dict
+            Additional arguments passed to ExtractFromPostgres (must include table_name)
+        
+        Raises
+        ------
+        ValueError
+            If table_name is not provided in kwargs
+        """
+        
+        # Validate that table_name is provided
+        if 'table_name' not in kwargs or not kwargs['table_name']:
+            raise ValueError(
+                "table_name must be provided for incremental extraction. "
+                "Pass it as table_name='your_table' in the constructor."
+            )
+        
+        # Set up metadata handling
+        self._metadata_path = Path(data_metadata)
+        self.metadata_handler = MetadataHandler(data_metadata)
+        kwargs.update({"metadata_handler": self.metadata_handler})    
+        
+        # Initialize postgres functionality (this sets self._table_name)
+        super().__init__(**kwargs)
+        
+        # Initialize starting row (may be updated from metadata)
+        self._starting_row = row_start
+        
+        # Try to find the last extracted data for THIS specific table
+        self._last_extracted_data = None
+        try:
+            for meta in self._metadata_handler._metadata:
+                if (meta.get("data_type") == MetadataTypes.TABULAR.value and 
+                    meta.get("content", {}).get("table_name") == self._table_name):
+                    self._last_extracted_data = meta
+            
+            if self._last_extracted_data:
+                logger.info(
+                    "Found last extracted metadata for table '%s': rows %s to %s", 
+                    self._table_name,
+                    self._last_extracted_data["content"]["row_start"],
+                    self._last_extracted_data["content"]["row_end"]
+                )
+                # Resume from the next row after the last extracted one
+                self._starting_row = self._last_extracted_data["content"]["row_end"] + 1
+                logger.info("Resuming from row %s", self._starting_row)
+            else:
+                logger.info("No previous extraction found, starting from row %s", self._starting_row)
+                
+        except Exception as exc:
+            logger.exception("Exception while retrieving metadata: %s", exc)
+            self._last_extracted_data = None
+        
+        # Calculate ending row
+        if n_rows != -1 and row_end != -1:
+            logger.warning("Both n_rows and row_end provided. Using row_end=%s", row_end)
+            self._ending_row = row_end
+        elif n_rows != -1:
+            # n_rows=10 starting from row 0 means rows 0-9, so end is start + n_rows - 1
+            self._ending_row = self._starting_row + n_rows - 1
+        elif row_end != -1:
+            self._ending_row = row_end
+        else:
+            self._ending_row = -1
+        
+        if self._ending_row == -1:
+            logger.info("Will extract all remaining rows starting at row %s", self._starting_row)
+        else:
+            logger.info(
+                "Will extract rows %s to %s (%s rows)",
+                self._starting_row, self._ending_row, 
+                self._ending_row - self._starting_row + 1
+            )
+    
+    async def arun(self, *args, **kwargs):
+        """Run incremental extraction by passing row range to parent."""
+        table_names = args[0] if args else [self._table_name]
+        
+        logger.debug("Starting incremental extraction for: %s", table_names)
+        
+        try:
+            await self.get_connection()
+            logger.info("Database connected")
+        except Exception as exc:
+            logger.error("Failed to connect: %s", exc)
+            raise
+        
+        print(common.Ui.heading_divider)
+        print(f"{'Incremental Extract':^40} | {self.database:>20}")
+        print(common.Ui.heading_divider)
+        
+        if len(table_names) > 1:
+            logger.warning("Multiple tables will use same row range")
+        
+        # Handle -1 for ending_row (extract all remaining rows)
+        end_row_to_use = self._ending_row
+        if self._ending_row == -1:
+            # Get table row count to determine actual end
+            for table in table_names:
+                n_rows, _ = await self._table_shape_(table)
+                end_row_to_use = n_rows - 1  # 0-indexed, so last row is n_rows - 1
+                logger.info("Table '%s' has %s rows total (rows 0 to %s)", table, n_rows, end_row_to_use)
+                break  # Use first table's count if multiple tables
+        
+        for table in table_names:
+            # Check if we've already extracted all rows
+            if self._starting_row > end_row_to_use:
+                logger.info(
+                    "Table '%s': All rows already extracted (starting_row=%s > end_row=%s). Skipping.",
+                    table, self._starting_row, end_row_to_use
+                )
+                continue
+                
+            logger.info(
+                "Extracting '%s' rows %s to %s (%s rows)",
+                table, self._starting_row, end_row_to_use,
+                end_row_to_use - self._starting_row + 1
+            )
+            await self._fetch_chunks_of_data_from_db(table, self._starting_row, end_row_to_use)
+        
+        await self._conn.close()
+        return os.path.join(self._table_dir, table_names[0])
+    
 class ExtractFromFile(Extract):
     """
     Generic file extractor supporting Excel, CSV, and Parquet formats.
@@ -1308,82 +1834,93 @@ class IncrementalExtractFromPostgres(ExtractFromPostgres):
         return asyncio.run(self.arun(table_names=table_names))
         # raise NotImplementedError(f"{self.__class__.__name__} does not have synchronous run.")
 
-class IncrementalExtractFromPostgresRowWise(ExtractFromPostgres):
-    """The incremental extraction occurs row wise.
-    So, this expects a row number to take the data from 
-    and an ending row till which the data is to be taken."""
-    def __init__(
-            self, 
-            row_start: int = 0,
-            row_end: int = -1,
-            n_rows: Optional[int] = -1,
-            data_metadata: Union[str, Path] = ".data.metadata",
-            **kwargs
-    ):
-        """
-        _summary_
+# class IncrementalExtractFromPostgresRowWise(ExtractFromPostgres):
+#     """The incremental extraction occurs row wise.
+#     So, this expects a row number to take the data from 
+#     and an ending row till which the data is to be taken."""
+#     def __init__(
+#             self, 
+#             row_start: int = 0,
+#             row_end: int = -1,
+#             n_rows: Optional[int] = -1,
+#             data_metadata: Union[str, Path] = ".data.metadata",
+#             **kwargs
+#     ):
+#         """
+#         _summary_
 
-        Parameters
-        ----------
-        row_start : int, optional
-            Extraction should begin at , by default 0
-        row_end : int, optional
-            Data to be extracted upto this row number, by default -1, or gets all the rows
-        n_rows : Optional[int], optional
-            Number of rows to extract. Only to be provided when `end_row` is not provided, by default -1
-        data_metadata : Union[str, Path], optional
-            _description_, by default ".data.metadata"
-        """
+#         Parameters
+#         ----------
+#         row_start : int, optional
+#             Extraction should begin at , by default 0
+#         row_end : int, optional
+#             Data to be extracted upto this row number, by default -1, or gets all the rows
+#         n_rows : Optional[int], optional
+#             Number of rows to extract. Only to be provided when `end_row` is not provided, by default -1
+#         data_metadata : Union[str, Path], optional
+#             _description_, by default ".data.metadata"
+#         """
 
-        # inititalize starting row
-        self._starting_row = row_start
+#         # inititalize starting row
+#         self._starting_row = row_start
 
-        # load the last extracted row
-        # expects `.data.metadata` file
-        self._metadata_path = Path(data_metadata)
+#         # load the last extracted row
+#         # expects `.data.metadata` file
+#         self._metadata_path = Path(data_metadata)
 
-        self.metadata_handler = MetadataHandler(data_metadata)
+#         self.metadata_handler = MetadataHandler(data_metadata)
     
-        kwargs.update({"metadata_handler": self.metadata_handler})    
-        # initialize postgres funcitonality
-        super().__init__(**kwargs)
+#         kwargs.update({"metadata_handler": self.metadata_handler})    
+#         # initialize postgres funcitonality
+#         super().__init__(**kwargs)
         
-        try:
-            # check for the given table last recorded data
-            for meta in self._metadata_handler._metadata:
-                if meta.get("data_type") == MetadataTypes.TABULAR.value:
-                    if meta["content"]["table_name"] == self._table_name:
-                        self._last_extracted_data = meta
-                        logger.info("Last extracted metadata for the table %s = %s", self._table_name, self._last_extracted_data)
-                        # this will automatically get the latest entry for that table
+#         try:
+#             # check for the given table last recorded data
+#             for meta in self._metadata_handler._metadata:
+#                 if meta.get("data_type") == MetadataTypes.TABULAR.value:
+#                     if meta["content"]["table_name"] == self._table_name:
+#                         self._last_extracted_data = meta
+#                         logger.info("Last extracted metadata for the table %s = %s", self._table_name, self._last_extracted_data)
+#                         # this will automatically get the latest entry for that table
 
-        except Exception as exc:
-            logger.exception(
-                "Exception while getting the latest extracted metadata for the table, %s",
-                exc
-            )
-            self._last_extracted_data = None
+#         except Exception as exc:
+#             logger.exception(
+#                 "Exception while getting the latest extracted metadata for the table, %s",
+#                 exc
+#             )
+#             self._last_extracted_data = None
 
-        if self._last_extracted_data:
-        #     if not self._last_extracted_data.get("data_type") == MetadataTypes.TABULAR:
-        #         raise Exception("Last saved metadata is not of a table")
+#         if self._last_extracted_data:
+#         #     if not self._last_extracted_data.get("data_type") == MetadataTypes.TABULAR:
+#         #         raise Exception("Last saved metadata is not of a table")
 
-            # if last from the prev stored metadata is extracted
-            # update the starting row as the ending row + 1 of the last extracted data 
-            self._starting_row = self._last_extracted_data["content"]["row_end"] + 1 # last row of the last data
+#             # if last from the prev stored metadata is extracted
+#             # update the starting row as the ending row + 1 of the last extracted data 
+#             self._starting_row = self._last_extracted_data["content"]["row_end"] + 1 # last row of the last data
         
-        # initializing ending row according to the starting row
-        self._ending_row = max(self._starting_row + n_rows, row_end)
-        if self._ending_row == -1:
-            logger.warning("All rows of the data will be extracted")
+#         # initializing ending row according to the starting row
+#         if n_rows == -1 and row_end == -1:
+#             # neither of n_rows and row_end is given
+#             self._ending_row = -1
+#         else:
+#             self._ending_row = max(self._starting_row + n_rows, row_end)
+#         if self._ending_row == -1:
+#             logger.warning("All rows of the data will be extracted")
     
-    async def _fetch_chunks_of_data_from_db(self, table_name):
-        return await super()._fetch_chunks_of_data_from_db(table_name, self._starting_row, self._ending_row) 
+#     async def _fetch_chunks_of_data_from_db(self, table_name):
+#         if self._ending_row == -1:
+#             # get the table shape
+#             n_rows, n_cols = await self._table_shape_(table_name)
+            
+#             # ending row would become the last row
+#             self._ending_row = n_rows
+#         return await super()._fetch_chunks_of_data_from_db(table_name, self._starting_row, self._ending_row) 
     
-    async def arun(self, *args, **kwargs):
-        kwargs.update({"start_row": self._starting_row})
-        kwargs.update({"end_row": self._ending_row})
-        return await super().arun(*args, **kwargs)
+#     async def arun(self, *args, **kwargs):
+#         kwargs.update({"start_row": self._starting_row})
+#         kwargs.update({"end_row": self._ending_row})
+#         return await super().arun(*args, **kwargs)
     
-    async def run(self, *args, **kwargs):
-        return await super().run(*args, **kwargs)
+#     async def run(self, *args, **kwargs):
+#         return await super().run(*args, **kwargs)
+    

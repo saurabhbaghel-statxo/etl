@@ -574,7 +574,7 @@ class Etl(_runner.Runner):
             If none of the Extract, Transform, or Load pipeline operations are present.
         """
         assert self.extract_or_transform_or_load_present(), "None of the Extract, Transform or Load pipeline is present"
-    
+           
 
     def extract_or_transform_or_load_present(self) -> bool:
         """
