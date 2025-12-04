@@ -1274,7 +1274,7 @@ class ExtractFromPostgres(Extract):
             logger.info("Metadata = %s", str(_m))
             self._metadata_handler.write(**_m)
 
-            logger.info("Metadata written at=%s", self._metadata_handler.file)            
+            logger.info("Metadata written at=%s", self._metadata_handler._file)            
 
         else:
             raise Exception("No connection!")
