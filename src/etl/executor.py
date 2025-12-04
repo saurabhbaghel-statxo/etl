@@ -34,7 +34,7 @@ class Executor:
     async def _call_arun_executable(self, runnable, x, *args, **kwargs):
         return await runnable.arun(x, *args, **kwargs)
 
-    async def _execute_single_runnable(self, runnable, x, *args, **kwargs):
+    async def _execute_single_runnable(self, runnable, x: List, *args, **kwargs):
         logger.debug("Executing: %s", runnable)
         if runnable.status in ["queued", "inactive"]:
             runnable.status = "in_progress"
@@ -62,7 +62,7 @@ class Executor:
 
 
     # async def _execute_runnables_single_chain(self, runnables: List, x, *args, **kwargs):
-    async def _execute_runnables_single_chain(self, root_runnable, x, *args, **kwargs):
+    async def _execute_runnables_single_chain(self, root_runnable, x: List, *args, **kwargs):
         # root_runnable is RunnableNode
         runnable = root_runnable
         while runnable:

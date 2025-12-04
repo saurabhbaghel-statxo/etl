@@ -1083,18 +1083,19 @@ class ExtractFromPostgres(Extract):
                 yield row
 
     async def _table_shape_(self, table_name: str) -> Tuple[int, int]:
-        schema_name = self.schema_name or "public"
+        table_reference = f"{self.schema_name}.{table_name}" if self.schema_name else table_name
+
         _query_for_shape = f"""
         WITH cols AS (
             SELECT COUNT(*) AS column_count
             FROM information_schema.columns
-            WHERE table_schema='{self.schema_name}'
+            WHERE table_schema='{self.schema_name or 'public'}'
                 AND table_name = '{table_name}'
         ),
 
         rows AS (
             SELECT COUNT(*) AS row_count
-            FROM {table_name}
+            FROM {table_reference}
         )
         SELECT rows.row_count, cols.column_count
         FROM rows, cols;
@@ -1257,6 +1258,7 @@ class ExtractFromPostgres(Extract):
 
             # write metadata with actual rows extracted
             _m = {   
+                    "table_name": table_name,
                     "date_started": date_started,
                     "date_ended": date_ended,
                     "data_type": MetadataTypes.TABULAR.value,

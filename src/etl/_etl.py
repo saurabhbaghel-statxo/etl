@@ -698,7 +698,7 @@ class Etl(_runner.Runner):
 
         return res
     
-    async def arun(self, x, *args, **kwargs):
+    async def arun(self, x: List, *args, **kwargs):
         _arun_ = super().arun(x, *args, **kwargs)
         res = []
 

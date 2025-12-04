@@ -72,3 +72,14 @@
 
 ### Added
 - Can now schedule the whole etl pipeline to be repeated after fixed time (ETL-8)
+
+
+## [0.1.6.1] - 02-12-2025
+
+## [0.1.7] - 04-12-2025
+
+### Added
+- Can now load the data to GCP cloud storage
+
+### Changed
+- Metadata will be stored as a sqlite3 db as well as json

@@ -410,7 +410,7 @@ class _LoadParquetFromBuffer:
 #         finally:
 #             if conn:
 #                 await conn.close()
-class LoadToExcel(Load):
+class LoadToExcel(Load, name="LoadToExcel"):
     """
     Saves a Polars DataFrame to disk as Parquet, Excel, or CSV.
 
@@ -492,7 +492,7 @@ class LoadToExcel(Load):
         logger.info(f"Data successfully saved at: {output_path}")
         return output_path
 
-class LoadToPostgres(Load):
+class LoadToPostgres(Load, name="LoadToPostgres"):
     def __init__(
             self,
             username: str,
@@ -700,7 +700,53 @@ class LoadToPostgres(Load):
             if conn:
                 await conn.close()
 
+class LoadToGCP(Load, name="LoadToGCP"):
+    """
+    Loads a dataframe (or table path) into a GCP Cloud Storage bucket.
+    Automatically converts DF to parquet before upload.
+    """
 
+    def __init__(self, bucket: str, destination_path: str, *, project: str = None):
+        try:
+            from google.cloud import storage
+        except ImportError:
+            logger.exception("google-cloud package is not installed.")
+            raise ImportError("Please install google-cloud-storage using with - `pip install google-cloud-storage`")
+        
+        self.bucket_name = bucket
+        self.destination_path = destination_path
+        self.project = project
+        self.client = storage.Client(project=self.project)
+        self.bucket = self.client.bucket(self.bucket_name)
+
+    def _df_to_parquet(self, df: pl.DataFrame) -> str:
+        """Convert DF to temp parquet file before upload."""
+        local_path = "/tmp/_gcp_upload.parquet"
+        df.write_parquet(local_path)
+        return local_path
+
+    def _upload(self, local_path: str):
+        """Upload the file to GCP Storage."""
+        blob = self.bucket.blob(self.destination_path)
+        blob.upload_from_filename(local_path)
+
+    # Sync run()
+    def run(self, df: pl.DataFrame, *args, **kwargs):
+        local_path = self._df_to_parquet(df)
+        self._upload(local_path)
+        return {"status": "uploaded", "gcp_path": self.destination_path}
+
+    # Async arun()
+    async def arun(self, df: pl.DataFrame, *args, **kwargs):
+        # GCP client isn't async, so we run in threadpool
+        import asyncio
+
+        local_path = self._df_to_parquet(df)
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._upload, local_path)
+
+        return {"status": "uploaded", "gcp_path": self.destination_path}
 
 
 

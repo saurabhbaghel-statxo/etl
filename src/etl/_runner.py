@@ -136,7 +136,7 @@ class Runner(metaclass=_ExecutableMeta):
         Scheduler to run the runner at fixed schedule
         """
 
-    async def _async_run_core(self, x, *args, **kwargs):
+    async def _async_run_core(self, x: List, *args, **kwargs):
        
         # initialise policy
         # Using the default policy for now
@@ -256,7 +256,7 @@ class Runner(metaclass=_ExecutableMeta):
         return y
     
 
-    async def arun(self, x, *args, **kwargs):
+    async def arun(self, x: List, *args, **kwargs):
 
 
         if self.scheduler:

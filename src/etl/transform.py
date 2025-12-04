@@ -1836,7 +1836,7 @@ class Transform(metaclass=executable._ExecutableMeta):
                 elif type(table) is pl.DataFrame:
                     _ins.append(table)
                 else:
-                    raise NotImplementedError()
+                    raise NotImplementedError(f"Type of table is {type(table)}. It should be either `str` or a polars DataFrame")
             return _ins
         else:
             raise TypeError("Transform input should be either table path or table itself")

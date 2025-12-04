@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 import logging
 from enum import StrEnum
+import sqlite3
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -40,6 +41,9 @@ class FileData:
 class Metadata(BaseModel):
     """Meta data to be stored after every run of extraction"""
     
+    table_name: Optional[str] = ""
+    '''Name of the table'''
+
     date_started: Optional[datetime] = Field(default_factory=datetime.now)
     '''Date time extraction started'''
 
@@ -69,68 +73,139 @@ class Metadata(BaseModel):
 
 
 class MetadataHandler:
-    """Creates Metadata, reads-writes it. This is not a runnable"""
+    """Creates Metadata, reads/writes to JSON + SQLite DB."""
 
-    def __init__(self, file: str | Path = Path(".data.metadata")):
-        self._file = Path(file) if type(file) is str else file
-        
-        # initialize the metadata
-        self._metadata = self.load()
-    
-    @property
-    def file(self) -> Path:
-        return self._file
-    
-    def load(self) -> List[Dict]:
-        """Loads metadata already stored"""
+    def __init__(
+        self,
+        file: str | Path = Path(".data.metadata.json"),
+        db_path: str | Path = Path(".metadata/metadata.db")
+    ):
+        self._file = Path(file)
+        self._db_path = Path(db_path)
+
+        # Ensure folder exists
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Initialize storage
+        self._metadata = self.load_json()
+
+        # Initialize DB schema
+        self._init_db()
+
+    # =====================================================
+    #                       JSON MODE
+    # =====================================================
+
+    def load_json(self) -> List[Dict]:
         try:
             with open(self._file, "r") as fin:
-                prev_metadata = json.load(fin)
+                return json.load(fin)
         except FileNotFoundError:
-            logger.info("Metadata json not present. Creating new one")
-            prev_metadata = []
+            return []
 
-        finally:
-            return prev_metadata
-
-    # TODO: make it a decorator
-    def write(self, **kwargs):
-        """Writes the metadata to the file"""
-        
-        _metadata = kwargs.get("metadata")
-
-        if not _metadata:
-            _metadata = Metadata(**kwargs)
-
-        if not _metadata.content:
-            _row_start = kwargs.get("row_start", 0)
-            _row_end = kwargs.get("row_end", 0)
-
-            table_content = TabularData(row_start=_row_start, row_end=_row_end)
-
-            # update the table content
-            _metadata.content = table_content.model_dump()
-
-        logger.debug("Metadata = %s", str(_metadata))
-
-        if not self._metadata:
-            self._metadata = self.load()
-        
-        self._metadata.append(_metadata.model_dump())
-
-        logger.info("Writing the metadata to %s", self._file)
+    def write_json(self, metadata: Metadata):
+        """Append metadata to JSON file."""
+        self._metadata.append(metadata.model_dump())
         with open(self._file, "w") as fout:
             json.dump(self._metadata, fout)
-        
-    
-    def __repr__(self):
-        if not self._metadata:
-            self._metadata = self.load()
 
-        return (f"File = {self._file}"
-                f"{self._metadata[:min(len(self._metadata, 2))]}"   # first two entries
-                "..."
-                f"{self._metadata[max(-len(self._metadata, -2)):]}"  # bottom two entries
-                )
+    # =====================================================
+    #                       SQLite MODE
+    # =====================================================
 
+    def _init_db(self):
+        conn = sqlite3.connect(self._db_path)
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS metadata (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date_started TEXT,
+                date_ended TEXT,
+                data_type TEXT,
+                src_data TEXT,
+                dest_data TEXT,
+                content TEXT
+            )
+            """
+        )
+
+        conn.commit()
+        conn.close()
+
+    def write_db(self, metadata: Metadata):
+        conn = sqlite3.connect(self._db_path)
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            INSERT INTO metadata (
+                date_started, date_ended, data_type,
+                src_data, dest_data, content
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                metadata.date_started,
+                metadata.date_ended,
+                metadata.data_type,
+                metadata.src_data,
+                metadata.dest_data,
+                json.dumps(metadata.content),
+            ),
+        )
+
+        conn.commit()
+        conn.close()
+
+    def write(self, **kwargs):
+        metadata = kwargs.get("metadata")
+
+        if not metadata:
+            metadata = Metadata(**kwargs)
+
+        # Construct default content if not supplied
+        if not metadata.content:
+            content = TabularData(
+                table_name=metadata.table_name,
+                row_start=kwargs.get("row_start", 0),
+                row_end=kwargs.get("row_end", 0)
+            )
+            metadata.content = content.model_dump()
+
+        # Write JSON + DB
+        self.write_json(metadata)
+        self.write_db(metadata)
+
+        return metadata
     
+    def get_last_row_end(self, table_name: str) -> int:
+        conn = sqlite3.connect(self._db_path)
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT content
+            FROM metadata
+            WHERE content LIKE ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (f'%"table_name": "{table_name}"%',),
+        )
+
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            return 0  # No metadata yet → full load
+
+        content = json.loads(row[0])
+        return content.get("row_end", 0)
+
+    def get_incremental_range(self, table_name: str) -> Dict[str, int]:
+        last_end = self.get_last_row_end(table_name)
+        return {
+            "row_start": last_end + 1,
+            "row_end": None  # Your extractor decides final row_end
+        }
