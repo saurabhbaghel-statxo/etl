@@ -410,7 +410,7 @@ class _LoadParquetFromBuffer:
 #         finally:
 #             if conn:
 #                 await conn.close()
-class LoadToExcel(Load, name="LoadToExcel"):
+class LoadToExcel(Load):
     """
     Saves a Polars DataFrame to disk as Parquet, Excel, or CSV.
 
@@ -492,7 +492,7 @@ class LoadToExcel(Load, name="LoadToExcel"):
         logger.info(f"Data successfully saved at: {output_path}")
         return output_path
 
-class LoadToPostgres(Load, name="LoadToPostgres"):
+class LoadToPostgres(Load):
     def __init__(
             self,
             username: str,
@@ -700,7 +700,7 @@ class LoadToPostgres(Load, name="LoadToPostgres"):
             if conn:
                 await conn.close()
 
-class LoadToGCP(Load, name="LoadToGCP"):
+class LoadToGCP(Load):
     """
     Loads a dataframe (or table path) into a GCP Cloud Storage bucket.
     Automatically converts DF to parquet before upload.
